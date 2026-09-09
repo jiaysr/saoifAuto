@@ -1,0 +1,14 @@
+{
+  "runtime": {
+    "unicodeName": true,
+    "version": "Lua 5.4"
+  },
+  "workspace": {
+    "checkThirdParty": false
+  },
+  "completion": {
+    "callSnippet": "Replace",
+    "workspaceWord": true,
+    "showWord": "Fallback"
+  }
+}
