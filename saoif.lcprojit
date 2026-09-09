@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lcprojit projname="saoif" lcprojversion="150" is_acc_mode="0" appname="saoif" pkgname="com.saoif">
+    <lua entry="saoif.lua"/>
+    <ui entry="saoif.ui"/>
+    <rc entry="saoif.rc"/>
+    <luaej/>
+</lcprojit>
