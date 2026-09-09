@@ -1,0 +1,208 @@
+-- 脚本/tasks/fishing.lua
+-- 自动钓鱼功能
+-- 移植自 D:\project\AuotScript\SaoifAutoScript\tasks\Fishing\script_task.py
+-- 坐标与特征色基于 1280x720 分辨率
+
+local logger = require("core.logger")
+local pixel = require("core.pixel")
+local dispatcher = require("core.dispatcher")
+
+local M = { name = "钓鱼" }
+
+-- ============ 特征点定义 {x, y, "RRGGBB"}（来自原 Python 项目特征库） ============
+
+-- DO1：可点击"开始"状态
+local DO1 = {
+    { 1182, 485, "CFCF00" }, { 1180, 496, "DEDD00" }, { 1179, 508, "B57536" },
+    { 1179, 517, "F3F307" }, { 1178, 530, "FFFF02" }, { 1177, 547, "7B4826" },
+    { 1157, 546, "F7F74A" }, { 1155, 549, "F0F057" }, { 1205, 548, "C8B7A6" },
+}
+
+-- DO2：备用状态特征（原 Python 中定义未参与主循环判断）
+local DO2 = {
+    { 1187, 494, "255C7D" }, { 1174, 502, "594430" }, { 1161, 508, "245C7C" },
+    { 1163, 520, "27657D" }, { 1162, 530, "5D5C56" }, { 1163, 539, "376478" },
+    { 1183, 538, "296A7D" }, { 1195, 536, "4C6F77" }, { 1206, 527, "4C2A11" },
+    { 1211, 512, "1B5179" },
+}
+
+-- DO3：鱼上钩/结算相关状态
+local DO3 = {
+    { 1183, 494, "6D6D00" }, { 1182, 509, "502F16" }, { 1181, 520, "797901" },
+    { 1177, 536, "7F7F01" }, { 1157, 535, "767602" }, { 1176, 547, "5F4A3D" },
+    { 1181, 553, "412716" }, { 1186, 548, "492F1E" }, { 1199, 542, "4C2B17" },
+}
+
+-- DO4：提竿状态
+local DO4 = {
+    { 1186, 494, "46B4F8" }, { 1168, 515, "51D4FB" }, { 1165, 526, "50CEFB" },
+    { 1165, 538, "D7E0E0" }, { 1178, 538, "57D3FA" }, { 1199, 536, "BA6532" },
+    { 1202, 534, "DDDDDD" }, { 1202, 519, "B1DCEB" }, { 1193, 501, "4EC8FB" },
+}
+
+-- TARGET：完美区域提示文字特征
+local TARGET = {
+    { 499, 108, "FBF9F7" }, { 499, 109, "FBF9F7" }, { 499, 113, "FBF9F7" },
+    { 499, 116, "FBF9F7" }, { 499, 118, "FBF9F7" }, { 499, 119, "FBF9F7" },
+    { 503, 119, "F9F7F7" }, { 505, 118, "3434DD" }, { 500, 109, "5C5CE1" },
+}
+
+-- 浮标颜色 RGB(255,254,180)，需精确匹配
+local MATCH_THRESHOLD = 0.6   -- 对应原 Python 的 m >= n * 0.6
+local NEEDLE_TIMEOUT = 6000   -- 等待浮标进入完美区域的最长时间(ms)
+local CLONE_CONFIRM_FRAMES = 5 -- 连续 N 帧处于 DO3 状态判定为成功（替代原结算图判定）
+local CLONE_IMG = "资源/fishing_clone.png" -- 可选结算图片，存在时成功后自动点击
+
+-- 从界面读取配置
+function M.readConfig(handle)
+    local function num(page, id, def)
+        local v = tonumber(getUIText(handle, page, id))
+        return v or def
+    end
+    return {
+        loopTime    = num(1, "edLoopTime", 45),
+        maxCatch    = num(1, "edMaxCatch", 0),
+        clickX      = num(1, "edClickX", 1173),
+        clickY      = num(1, "edClickY", 510),
+        scanX       = num(1, "edScanX", 1015),
+        zoneY1      = num(1, "edZoneY1", 123),
+        zoneY2      = num(1, "edZoneY2", 523),
+        showHud     = getUIChecked(handle, 1, "chkShowHud"),
+        debugColors = getUIChecked(handle, 1, "chkDebugColors"),
+    }
+end
+
+local function doTap(cfg)
+    tap(cfg.clickX, cfg.clickY)
+end
+
+-- 判断可选的结算图片是否存在
+local function resolveCloneImg()
+    local ok, exists = pcall(fileExist, CLONE_IMG)
+    if ok and exists then
+        return CLONE_IMG
+    end
+    return nil
+end
+
+function M.run(cfg)
+    local pts1 = pixel.buildPoints(DO1)
+    local pts3 = pixel.buildPoints(DO3)
+    local pts4 = pixel.buildPoints(DO4)
+    local ptsT = pixel.buildPoints(TARGET)
+
+    local successCount = 0
+    local hud = nil
+    local cloneImg = resolveCloneImg()
+
+    local function updateHud(state)
+        if not cfg.showHud then return end
+        if not hud then hud = createHUD() end
+        showHUD(hud, string.format("钓鱼中 [%s]\n成功次数: %d", state, successCount),
+            14, "0xffffffff", "0xCC222222", 0, 20, 180, 300, 72)
+    end
+
+    logger.info("=== 开始钓鱼 ===")
+    logger.info(string.format("参数: 单轮超时=%ds 目标次数=%d 按钮=(%d,%d) 扫描列X=%d 区域Y=%d~%d",
+        cfg.loopTime, cfg.maxCatch, cfg.clickX, cfg.clickY, cfg.scanX, cfg.zoneY1, cfg.zoneY2))
+    if cloneImg then
+        logger.info("已找到结算图片: " .. cloneImg)
+    end
+
+    -- 关闭截图缓存，保证浮标追踪时每次取到实时画面
+    setSnapCacheTime(0)
+
+    local endTime = tickCount() + cfg.loopTime * 1000
+    local cloneSkip = 0
+    updateHud("待机")
+
+    while tickCount() < endTime do
+        -- 同一帧内完成多点状态判定
+        keepCapture()
+        local do1Ratio = pixel.matchRatio(pts1)
+        local do4Ratio = pixel.matchRatio(pts4)
+        local do3Ratio = pixel.matchRatio(pts3)
+        local tRatio = pixel.matchRatio(ptsT)
+        releaseCapture()
+
+        local do1 = do1Ratio >= MATCH_THRESHOLD
+        local do4 = do4Ratio >= MATCH_THRESHOLD
+        local do3Matched = do3Ratio >= MATCH_THRESHOLD
+        local textMatched = tRatio >= MATCH_THRESHOLD
+
+        -- 状态1：出现开始按钮
+        if do1 then
+            logger.info("点击开始")
+            doTap(cfg)
+            updateHud("抛竿")
+        end
+
+        -- 状态4：提竿时机
+        if do4 then
+            logger.info("提竿")
+            doTap(cfg)
+            updateHud("提竿")
+        end
+
+        -- 完美区域提示出现：追踪浮标并精准提竿
+        if textMatched and not do3Matched then
+            local pStart, pEnd = pixel.findPerfectZone(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+            if pStart then
+                logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
+                updateHud("追踪浮标")
+                local needleEnd = tickCount() + NEEDLE_TIMEOUT
+                while tickCount() < needleEnd do
+                    local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+                    if pos and pos >= pStart + 5 and pos <= pEnd + 5 then
+                        logger.info(string.format("命中! pos=%d", pos))
+                        doTap(cfg)
+                        sleep(1000)
+                        break
+                    end
+                    sleep(5)
+                end
+            end
+        end
+
+        -- DO3 状态持续出现（无文字提示）→ 判定钓鱼成功
+        if not textMatched and do3Matched then
+            cloneSkip = cloneSkip + 1
+            if cloneSkip >= CLONE_CONFIRM_FRAMES then
+                cloneSkip = 0
+                successCount = successCount + 1
+                logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
+                updateHud("结算")
+                -- 若提供了结算图片资源则自动点击继续
+                if cloneImg then
+                    pcall(function()
+                        local _, cx, cy = findPic(0, 0, 0, 0, cloneImg, "101010", 0, 0.8)
+                        if cx and cx ~= -1 then
+                            tap(cx, cy)
+                        end
+                    end)
+                end
+                endTime = tickCount() + cfg.loopTime * 1000
+                sleep(1000)
+            end
+        end
+
+        -- 达到目标次数
+        if cfg.maxCatch > 0 and successCount >= cfg.maxCatch then
+            logger.info(string.format("已达目标次数 %d，提前结束", cfg.maxCatch))
+            break
+        end
+
+        sleep(30)
+    end
+
+    if hud then
+        hideHUD(hud)
+        hud = nil
+    end
+    setSnapCacheTime(100)
+    logger.info(string.format("========== 结束，共钓鱼 %d 次 ==========", successCount))
+end
+
+dispatcher.register(M)
+
+return M

@@ -52,7 +52,7 @@ end
 
 logger.info("SAOIF 自动助手启动")
 
-local ret = showUI("saoif.ui", 640, 860, onUIEvent)
+local ret = showUI("saoif.ui", 680, 760, onUIEvent)
 
 if not selected then
     logger.info("未选择功能，脚本结束")

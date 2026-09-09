@@ -1,0 +1,87 @@
+-- 脚本/core/pixel.lua
+-- 像素/颜色工具
+-- 引擎颜色格式为 "BBGGRR"（与 OpenCV 的 BGR 一致），
+-- 特征库采集的参考色为 "RRGGBB"，本模块负责转换与竖列像素扫描。
+
+local _M = {}
+
+-- "RRGGBB" -> "BBGGRR"
+function _M.toBGRHex(rrggbb)
+    local s = tostring(rrggbb)
+    return s:sub(5, 6) .. s:sub(3, 4) .. s:sub(1, 2)
+end
+
+-- 把特征点表 {{x, y, "RRGGBB"}, ...} 拼成 cmpColorEx 用的比色串
+-- 形如 "x|y|BBGGRR-0F0F0F,x|y|BBGGRR-0F0F0F,..."
+-- tol 为偏色值(16进制字符串)，对应原 Python 版 _check_colors 的 tol=15
+function _M.makeColorStr(tbl, tol)
+    tol = tol or "0F0F0F"
+    local parts = {}
+    for i, p in ipairs(tbl) do
+        parts[i] = string.format("%d|%d|%s-%s", p[1], p[2], _M.toBGRHex(p[3]), tol)
+    end
+    return table.concat(parts, ",")
+end
+
+-- 调试输出：打印每个点的参考色与实际色
+function _M.dumpPoints(tbl, label)
+    for _, p in ipairs(tbl) do
+        local c = getPixelColor(p.x, p.y)
+        local r, g, b = colorToRGB(c)
+        local rr, gg, bb = colorToRGB(_M.toBGRHex(p[3]))
+        print(string.format("  %s (%d,%d) 参考=(%3d,%3d,%3d) 实际=(%3d,%3d,%3d)",
+            label, p[1], p[2], rr, gg, bb, r, g, b))
+    end
+end
+
+-- 解析引擎颜色值(可为字符串或数字) -> r, g, b
+function _M.parseColor(c)
+    if type(c) == "number" then
+        return colorToRGB(c)
+    end
+    local s = tostring(c):match("(%x%x%x%x%x%x)%s*$")
+    if not s then
+        return colorToRGB(c)
+    end
+    -- 字符串为 "BBGGRR"
+    local b = tonumber(s:sub(1, 2), 16)
+    local g = tonumber(s:sub(3, 4), 16)
+    local r = tonumber(s:sub(5, 6), 16)
+    return r, g, b
+end
+
+-- 在竖直扫描列上寻找完美区域（对应 Python 版 crop[123:523, 1014:1016] 的绿色检测）
+-- 返回 p_start, p_end（未找到返回 nil）
+-- 完美区判定: g>225 且 r<210 且 b<165 且 (g-r)>15 且 (g-b)>60
+function _M.findPerfectZone(scanX, y1, y2)
+    local w, h, arr = getScreenPixel(scanX - 1, y1, scanX + 1, y2)
+    if not w or w < 0 then return nil end
+    local col = 2 -- 取中间列 (x = scanX)
+    local pStart, pEnd
+    for row = 0, h - 1 do
+        local r, g, b = _M.parseColor(arr[row * w + col])
+        if g and g > 225 and r < 210 and b < 165 and (g - r) > 15 and (g - b) > 60 then
+            if not pStart then pStart = y1 + row end
+            pEnd = y1 + row
+        end
+    end
+    if pStart then return pStart, pEnd end
+    return nil
+end
+
+-- 在竖直扫描列上寻找浮标位置（颜色精确匹配 RGB(255,254,180)）
+-- 返回浮标 y 坐标（未找到返回 nil）
+function _M.findNeedle(scanX, y1, y2)
+    local w, h, arr = getScreenPixel(scanX - 1, y1, scanX + 1, y2)
+    if not w or w < 0 then return nil end
+    local col = 2
+    for row = 0, h - 1 do
+        local r, g, b = _M.parseColor(arr[row * w + col])
+        if r == 255 and g == 254 and b == 180 then
+            return y1 + row
+        end
+    end
+    return nil
+end
+
+return _M
