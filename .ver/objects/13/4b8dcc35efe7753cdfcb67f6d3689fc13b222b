@@ -1,0 +1,2 @@
+-- 临时入口：仅运行颜色测试
+require("test_color")

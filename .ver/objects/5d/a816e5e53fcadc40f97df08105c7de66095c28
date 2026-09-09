@@ -1,7 +1,7 @@
 -- 脚本/tasks/fishing.lua
 -- 自动钓鱼功能
 -- 移植自 D:\project\AutoScript\SaoifAutoScript\tasks\Fishing\script_task.py
--- 设备分辨率 720x1280，横屏显示（rotate=1），脚本坐标基于横屏 1280x720
+-- 坐标与特征色基于 1280x720 分辨率
 
 local logger = require("core.logger")
 local pixel = require("core.pixel")
@@ -10,7 +10,6 @@ local dispatcher = require("core.dispatcher")
 local M = { name = "钓鱼" }
 
 -- ============ 特征比色串（"x|y|BBGGRR-偏色,..."，颜色为原 Python RRGGBB 转 BBGGRR） ============
--- 坐标均为横屏 1280x720 空间（设备 720x1280 竖屏 + rotate=1 横屏显示）
 -- DO1：可点击"开始"状态
 local DO1 = "1182|485|00CFCF-0F0F0F,1180|496|00DDDE-0F0F0F,1179|508|3675B5-0F0F0F,"
     .. "1179|517|07F3F3-0F0F0F,1178|530|02FFFF-0F0F0F,1177|547|26487B-0F0F0F,"

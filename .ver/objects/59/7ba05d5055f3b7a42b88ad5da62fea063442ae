@@ -1,0 +1,75 @@
+-- 脚本/saoif.lua
+-- 主入口：显示配置界面 → 校验功能选择 → 分发到对应任务模块
+-- 注意：界面下拉框 selFunction 的选项名称必须与 tasks 模块的 name 一致
+
+local logger = require("core.logger")
+local dispatcher = require("core.dispatcher")
+
+-- 加载并注册所有功能模块（新增功能在此追加一行即可）
+require("tasks.fishing")
+
+local selected = nil -- { task = 模块, cfg = 配置表 }
+
+local function onUIEvent(handle, event, arg1, arg2, arg3)
+    if event == "onload" then
+        logger.info("配置界面加载完成")
+
+    elseif event == "onclick" then
+        logger.debug("按钮点击:", arg2)
+
+    elseif event == "onselected" then
+        local name = getUISelectText(handle, 0, "selFunction")
+        logger.info("选择功能: " .. tostring(name))
+
+    elseif event == "onclose" then
+        if arg1 then
+            -- 点击【继续】：必须先选择功能才能运行
+            local name = getUISelectText(handle, 0, "selFunction")
+            local idx = getUISelected(handle, 0, "selFunction")
+            if idx == nil or idx < 0 or name == nil or name == "" then
+                toast("请先选择一个功能再运行！")
+                return -- 不关闭窗口
+            end
+            local task = dispatcher.find(name)
+            if not task then
+                toast("未找到功能模块: " .. tostring(name))
+                return
+            end
+            local ok, cfg = pcall(task.readConfig, handle)
+            if not ok or not cfg then
+                toast("读取配置失败，请检查设置项")
+                logger.warn("readConfig 出错: " .. tostring(cfg))
+                return
+            end
+            selected = { task = task, cfg = cfg }
+            closeWindow(handle, true)
+        else
+            -- 点击【退出】
+            closeWindow(handle, false)
+        end
+    end
+end
+
+logger.info("SAOIF 自动助手启动")
+
+local ret = showUI("saoif.ui", 640, 860, onUIEvent)
+
+if not selected then
+    logger.info("未选择功能，脚本结束")
+    return
+end
+
+logger.info("========== 开始运行功能: " .. selected.task.name .. " ==========")
+
+local ok, err = xpcall(function()
+    selected.task.run(selected.cfg)
+end, function(e)
+    return debug.traceback(e)
+end)
+
+if not ok then
+    logger.error("任务执行出错: " .. tostring(err))
+    toast("任务执行出错，详见日志")
+else
+    logger.info("========== 功能执行完毕 ==========")
+end

@@ -1,0 +1,17 @@
+-- 临时入口：测试结算图资源路径与找图
+print("workpath=" .. tostring(getWorkPath()))
+local candidates = { "res/Fishing_clone.png", "Fishing_clone.png", "资源/res/Fishing_clone.png", "资源/Fishing_clone.png" }
+for _, p in ipairs(candidates) do
+    local ok, ex = pcall(fileExist, p)
+    print("fileExist", p, tostring(ex))
+end
+
+keepCapture()
+for _, p in ipairs(candidates) do
+    local ret, x, y = findPic(915, 173, 961, 217, p, "101010", 0, 0.8)
+    print("findPic region", p, ret, x, y)
+    local ret2, x2, y2 = findPic(0, 0, 0, 0, p, "101010", 0, 0.8)
+    print("findPic full  ", p, ret2, x2, y2)
+end
+releaseCapture()
+print("==== 测试完成 ====")

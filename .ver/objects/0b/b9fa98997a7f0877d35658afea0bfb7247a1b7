@@ -1,0 +1,9 @@
+-- 临时入口：直接运行钓鱼任务验证（绕过 UI）
+local fishing = require("tasks.fishing")
+local cfg = {
+    loopTime = 45, maxCatch = 0,
+    clickX = 1173, clickY = 510,
+    scanX = 1015, zoneY1 = 123, zoneY2 = 523,
+    showHud = false, debugColors = false,
+}
+fishing.run(cfg)

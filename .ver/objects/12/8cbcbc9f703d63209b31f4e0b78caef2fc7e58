@@ -1,7 +1,7 @@
 -- 脚本/tasks/fishing.lua
 -- 自动钓鱼功能
 -- 移植自 D:\project\AutoScript\SaoifAutoScript\tasks\Fishing\script_task.py
--- 设备分辨率 720x1280，横屏显示（rotate=1），脚本坐标基于横屏 1280x720
+-- 坐标与特征色基于 1280x720 分辨率
 
 local logger = require("core.logger")
 local pixel = require("core.pixel")
@@ -10,7 +10,6 @@ local dispatcher = require("core.dispatcher")
 local M = { name = "钓鱼" }
 
 -- ============ 特征比色串（"x|y|BBGGRR-偏色,..."，颜色为原 Python RRGGBB 转 BBGGRR） ============
--- 坐标均为横屏 1280x720 空间（设备 720x1280 竖屏 + rotate=1 横屏显示）
 -- DO1：可点击"开始"状态
 local DO1 = "1182|485|00CFCF-0F0F0F,1180|496|00DDDE-0F0F0F,1179|508|3675B5-0F0F0F,"
     .. "1179|517|07F3F3-0F0F0F,1178|530|02FFFF-0F0F0F,1177|547|26487B-0F0F0F,"
@@ -77,22 +76,15 @@ local function isMatch(colorStr)
     return n > 0 and m >= n * MATCH_RATE
 end
 
--- 查找结算弹窗的 X 按钮，找到返回左上角坐标
-local function findClone()
+-- 查找并点击结算弹窗的 X 按钮，返回是否找到
+local function findClone(ret)
     local r, cx, cy = findPic(CLONE_ROI[1], CLONE_ROI[2], CLONE_ROI[3], CLONE_ROI[4],
         CLONE_IMG, "101010", 0, 0.8)
     if r ~= -1 and cx ~= -1 then
-        return cx, cy
+        ret.x, ret.y = cx, cy
+        return true
     end
-    return nil
-end
-
--- 打印浮标位置变化与速度（px/s）
-local function logNeedleMove(pos, now, lastPos, lastTick)
-    local dt = now - lastTick
-    local v = dt > 0 and math.abs(pos - lastPos) * 1000 / dt or 0
-    logger.info(string.format("浮标 y=%3d (%+d) 间隔=%2dms 速度=%6.0f px/s",
-        pos, pos - lastPos, dt, v))
+    return false
 end
 
 function M.run(cfg)
@@ -125,12 +117,12 @@ function M.run(cfg)
 
     local endTime = tickCount() + cfg.loopTime * 1000
     local cloneSkip = 0
-    local pullPhase = false -- 提竿后进入拉竿阶段，期间持续观测浮标
-    local obsPos, obsTick   -- 观测用的上一次浮标位置/时间
+    local pullPhase = false    -- 提竿后进入拉竿阶段，期间持续观测浮标
+    local obsPos, obsTick      -- 观测用的上一次浮标位置/时间
     updateHud("待机")
 
     while tickCount() < endTime do
-        -- 与 Python 一致：各状态基于独立采样判定
+        -- 与 Python 一致：各状态基于同一时刻的独立采样判定
         local do1 = isMatch(DO1)
         local do4 = isMatch(DO4)
         local do3Matched = isMatch(DO3)
@@ -159,11 +151,13 @@ function M.run(cfg)
             local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
             if pos then
                 if obsPos and pos ~= obsPos then
-                    logNeedleMove(pos, now, obsPos, obsTick)
+                    local dt = now - obsTick
+                    local v = dt > 0 and math.abs(pos - obsPos) * 1000 / dt or 0
+                    logger.info(string.format("浮标 y=%3d (%+d) 间隔=%2dms 速度=%6.0f px/s",
+                        pos, pos - obsPos, dt, v))
                 end
                 obsPos, obsTick = pos, now
             else
-                -- 浮标离开扫描列，重新等待首次出现
                 obsPos, obsTick = nil, nil
             end
         end
@@ -174,24 +168,14 @@ function M.run(cfg)
             if pStart then
                 logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
                 updateHud("追踪浮标")
-                local lastPos, lastTick
                 local needleEnd = tickCount() + NEEDLE_TIMEOUT
                 while tickCount() < needleEnd do
-                    local now = tickCount()
                     local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-                    if pos then
-                        if lastPos and pos ~= lastPos then
-                            logNeedleMove(pos, now, lastPos, lastTick)
-                        end
-                        lastPos, lastTick = pos, now
-                        if pos >= pStart + 5 and pos <= pEnd + 5 then
-                            logger.info(string.format("命中! pos=%d", pos))
-                            doTap(cfg)
-                            sleep(1000)
-                            break
-                        end
-                    else
-                        lastPos, lastTick = nil, nil
+                    if pos and pos >= pStart + 5 and pos <= pEnd + 5 then
+                        logger.info(string.format("命中! pos=%d", pos))
+                        doTap(cfg)
+                        sleep(1000)
+                        break
                     end
                     sleep(5)
                 end
@@ -203,13 +187,13 @@ function M.run(cfg)
             cloneSkip = cloneSkip + 1
             if cloneSkip >= CLONE_CONFIRM_FRAMES then
                 cloneSkip = 0
-                local cx, cy = findClone()
-                if cx then
+                local hit = {}
+                if findClone(hit) then
                     successCount = successCount + 1
                     logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
                     updateHud("结算")
                     pullPhase = false
-                    tap(cx + CLONE_HALF_W, cy + CLONE_HALF_H)
+                    tap(hit.x + CLONE_HALF_W, hit.y + CLONE_HALF_H)
                     endTime = tickCount() + cfg.loopTime * 1000
                     sleep(1000)
                 end
