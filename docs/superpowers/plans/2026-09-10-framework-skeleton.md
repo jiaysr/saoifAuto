@@ -947,6 +947,7 @@ end
 -- 规则对象：把「特征数据」声明成数据，把「怎么匹配/点击」收敛到这里。
 -- 业务代码里不再出现裸露的比色串与坐标。
 local pixel = require("vision.pixel")
+local image = require("vision.image")
 
 local _M = {}
 
@@ -970,7 +971,9 @@ function _M.image(file, opt)
     return {
         kind  = "image",
         file  = file,
-        roi   = opt.roi,
+        roi   = opt.roi,                       -- 搜索区域（比模板大）
+        halfW = opt.halfW or 0,                -- 模板半宽，用于算点击中心
+        halfH = opt.halfH or 0,                -- 模板半高
         sim   = opt.sim   or DEFAULTS.image.sim,
         delta = opt.delta or DEFAULTS.image.delta,
     }
@@ -987,10 +990,8 @@ function _M.appear(r)
         local m, n = pixel.matchRatio(r.str, r.tol)
         return n > 0 and m >= n * r.rate
     elseif r.kind == "image" then
-        if not r.roi then return false end
-        -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
-        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        return ret ~= -1 and x ~= -1 and y ~= -1
+        -- 与 clickRule 共用同一条找图路径，避免两处各写一遍 findPic 与守卫
+        return image.findCenter(r) ~= nil
     end
     return false
 end
@@ -1008,11 +1009,10 @@ function _M.clickRule(r)
     if r.kind == "click" then
         tap(r.x, r.y)
         return true
-    elseif r.kind == "image" and r.roi then
-        -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
-        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        if ret ~= -1 and x ~= -1 and y ~= -1 then
-            tap(x + math.floor((r.roi[3] - r.roi[1]) / 2), y + math.floor((r.roi[4] - r.roi[2]) / 2))
+    elseif r.kind == "image" then
+        local cx, cy = image.findCenter(r)
+        if cx then
+            tap(cx, cy)
             return true
         end
     end
@@ -1042,15 +1042,22 @@ return _M
 -- 找图封装：统一 findPic 的返回约定（-1 表示未找到）
 local _M = {}
 
--- 返回 中心点 x, y；未找到返回 nil
+-- 纯函数：由 findPic 返回的匹配左上角，按**模板半尺寸**算出点击中心。
+-- 注意：不能用 ROI 的半尺寸 —— ROI 是搜索区域，比模板大（例：CLONE_ROI 46x44
+-- 而模板 40x31），用 ROI 半尺寸会点偏且与匹配位置无关。
+-- 未提供 halfW/halfH 时缺省 0，即点匹配到的左上角（诚实且安全的缺省）。
+function _M.tapPoint(rule, x, y)
+    return x + (rule.halfW or 0), y + (rule.halfH or 0)
+end
+
+-- 找图并返回点击中心 x, y；未找到返回 nil
 function _M.findCenter(rule)
     if not rule.roi then return nil end
     -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
     local ret, x, y = findPic(rule.roi[1], rule.roi[2], rule.roi[3], rule.roi[4],
         rule.file, rule.delta or "101010", 0, rule.sim or 0.8)
     if ret == -1 or x == -1 or y == -1 then return nil end
-    return x + math.floor((rule.roi[3] - rule.roi[1]) / 2),
-           y + math.floor((rule.roi[4] - rule.roi[2]) / 2)
+    return _M.tapPoint(rule, x, y)
 end
 
 return _M
@@ -1343,7 +1350,11 @@ return {
 
     -- 结算弹窗右上角 X 按钮模板（打包在 资源/saoif.rc，findPic 用裸文件名引用）
     -- 对应原 Python I_CLONE: roi=(915,173,961,217), threshold=0.8
-    CLONE  = rule.image("Fishing_clone.png", { roi = { 915, 173, 961, 217 }, sim = 0.8 }),
+    CLONE  = rule.image("Fishing_clone.png", {
+        roi = { 915, 173, 961, 217 },   -- 搜索区域 46x44
+        halfW = 20, halfH = 15,         -- 模板 40x31 的一半（原 Python CLONE_HALF_W/H）
+        sim = 0.8,
+    }),
 }
 
 -- 开始 / 提竿按钮不在这里：它的坐标是用户可配的，唯一来源是 config.defaults()
