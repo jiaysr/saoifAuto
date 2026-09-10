@@ -988,8 +988,9 @@ function _M.appear(r)
         return n > 0 and m >= n * r.rate
     elseif r.kind == "image" then
         if not r.roi then return false end
-        local x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        return x ~= -1 and y ~= -1
+        -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
+        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
+        return ret ~= -1 and x ~= -1 and y ~= -1
     end
     return false
 end
@@ -1008,8 +1009,9 @@ function _M.clickRule(r)
         tap(r.x, r.y)
         return true
     elseif r.kind == "image" and r.roi then
-        local x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        if x ~= -1 and y ~= -1 then
+        -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
+        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
+        if ret ~= -1 and x ~= -1 and y ~= -1 then
             tap(x + math.floor((r.roi[3] - r.roi[1]) / 2), y + math.floor((r.roi[4] - r.roi[2]) / 2))
             return true
         end
@@ -1043,9 +1045,10 @@ local _M = {}
 -- 返回 中心点 x, y；未找到返回 nil
 function _M.findCenter(rule)
     if not rule.roi then return nil end
-    local x, y = findPic(rule.roi[1], rule.roi[2], rule.roi[3], rule.roi[4],
+    -- findPic 返回 ret, x, y（ret 为图片索引，-1 表示未找到）
+    local ret, x, y = findPic(rule.roi[1], rule.roi[2], rule.roi[3], rule.roi[4],
         rule.file, rule.delta or "101010", 0, rule.sim or 0.8)
-    if x == -1 or y == -1 then return nil end
+    if ret == -1 or x == -1 or y == -1 then return nil end
     return x + math.floor((rule.roi[3] - rule.roi[1]) / 2),
            y + math.floor((rule.roi[4] - rule.roi[2]) / 2)
 end
