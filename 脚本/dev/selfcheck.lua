@@ -218,6 +218,28 @@ local function caseRowPool()
     a.eq(rowpool.matchAny(nil, { "btnRow" }), nil, "matchAny 对 nil 返回 nil")
 end
 
+local fishTask = require("tasks.fishing.task")
+local fishAssets = require("tasks.fishing.assets")
+local fishConfig = require("tasks.fishing.config")
+
+local function caseFishing()
+    a.eq(fishTask.name, "fishing", "钓鱼任务 name 为 fishing")
+    a.eq(fishTask.title, "钓鱼", "钓鱼任务 title 为 钓鱼")
+    a.eq(fishTask.ui, "tasks/fishing.ui", "钓鱼任务 ui 指向参数页")
+    a.eq(type(fishTask.run), "function", "钓鱼任务实现了 run")
+    a.eq(type(fishTask.readConfig), "function", "钓鱼任务实现了 readConfig")
+
+    a.eq(fishAssets.DO1.kind, "color", "DO1 是比色规则")
+    a.eq(fishAssets.TARGET.kind, "color", "TARGET 是比色规则")
+    a.eq(fishAssets.CLONE.kind, "image", "CLONE 是找图规则")
+
+    local d = fishConfig.defaults()
+    a.eq(d.loopTime, 45, "默认单轮超时 45 秒")
+    a.eq(d.maxCatch, 0, "默认目标次数 0（不限）")
+    a.eq(d.clickX, 1173, "默认按钮 X")
+    a.eq(d.clickY, 510, "默认按钮 Y")
+end
+
 function _M.run()
     a.reset()
     print("[selfcheck] 运行环境: " .. (_M.onDevice() and "lrjl 设备" or "本机 Lua（设备相关用例将跳过）"))
@@ -230,6 +252,7 @@ function _M.run()
     caseScheduler()
     caseRule()
     caseRowPool()
+    caseFishing()
 
     return a.report("selfcheck")
 end
