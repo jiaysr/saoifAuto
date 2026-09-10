@@ -157,10 +157,12 @@ return {
 **`run` 的约定**：
 - 自行循环直到达成 `limitCount` 或超出 `limitTime`，然后正常返回。
 - 每轮循环须检查 `ctx.shouldStop()`（全局停止信号），为真时尽快返回。
-- 用 `ctx.hud:update(状态文字)` 更新 HUD，不自己管理 HUD 句柄。
+- 用 `require("ui.hud").new(cfg.showHud, "标题")` 自建 HUD，`hud:update(文字)` / `hud:close()`。
 - 需要中止时 `error(ex.recoverable("原因"))`；正常跑完直接 `return`。
 
-**`ctx` 提供**：`shouldStop()`、`hud`、`stats`（本轮计数）、`taskName`。
+**`ctx` 提供**：`shouldStop()`（读调度器停止标志）、`taskName`。**只有这两项** —— `ui.hud` 已经把 HUD 句柄生命周期包成一行，再往 `ctx` 里塞一层是多余的；本轮统计本来就是任务自己的局部变量。
+
+**`readConfig` 不带参数**：调度器执行任务时配置窗口早已关闭，没有 handle 可用。任务从**已持久化的配置文件**读取（`core/settings.pageOf(taskName, page)`），参数页只负责写入。
 
 **每个任务的参数页 UI 约定**（因设置存在这里，§8）——除功能自己的参数外，必须包含这组调度控件：
 
@@ -178,7 +180,7 @@ return {
 
 ```lua
 local scheduler = require("core.scheduler")
-scheduler.setup(tasks, settings)       -- 注入清单（tasks/index.lua）与设置读取器
+scheduler.setup(tasks)                 -- 注入清单（tasks/index.lua）；设置由 core/settings 直接读
 
 while not scheduler.shouldStop() do
     local task = scheduler.nextDue(os.time())

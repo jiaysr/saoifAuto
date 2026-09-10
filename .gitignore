@@ -13,6 +13,9 @@
 # 注意：本项目里它是指向 ~/.omo/codegraph/… 的符号链接，故不带尾部斜杠
 .codegraph
 
+# superpowers 技能的临时工作区（ledger / brief / 评审包等草稿）
+.superpowers
+
 
 # ===== 以下是刻意保留在 git 中的文件，不要忽略 =====
 

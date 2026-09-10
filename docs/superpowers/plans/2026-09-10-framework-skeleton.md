@@ -232,7 +232,8 @@ git commit -m "feat: 新增自检工具与错误分类模块"
 - Consumes: `core.exception`（本任务暂不直接用）
 - Produces:
   - `require("core.state")` → `{ load(), save() -> bool, get(taskName) -> record, reset() }`；`record` 字段 `nextRun`/`successCount`/`failureStreak`/`lastResult`
-  - `require("core.settings")` → `{ decode(raw) -> table, page(cfg, idx) -> table, bool(v, def) -> bool, num(v, def) -> number, read(taskName, defaults) -> { enabled, priority, successInterval, failureInterval } }`
+  - `require("core.settings")` → `{ decode(raw) -> table, page(cfg, idx) -> table, pageOf(taskName, idx) -> table, bool(v, def) -> bool, num(v, def) -> number, read(taskName, defaults) -> { enabled, priority, successInterval, failureInterval } }`
+    - `pageOf(taskName, idx)` 返回该任务配置**指定标签页**的原始键值表（值均为字符串）。Task 7 的 `config.lua` 用它读自己的参数页（page1）
 
 - [ ] **Step 1: 追加失败用例（先写测试）**
 
@@ -393,15 +394,18 @@ function _M.page(cfg, idx)
     return cfg["page" .. tostring(idx or 0)] or {}
 end
 
+-- 取某任务配置指定标签页的原始键值表（值均为字符串）
+-- 任务自己的参数页用这个读（fishing 的参数在 page1）
+function _M.pageOf(taskName, idx)
+    if type(getUIConfig) ~= "function" then return {} end
+    return _M.page(_M.decode(getUIConfig("tasks_" .. taskName .. ".config")), idx)
+end
+
 -- 读某任务的调度设置。defaults 传任务模块本身（含 enabled/priority/interval）
 function _M.read(taskName, defaults)
     defaults = defaults or {}
 
-    local cfg = {}
-    if type(getUIConfig) == "function" then
-        cfg = _M.decode(getUIConfig("tasks_" .. taskName .. ".config"))
-    end
-    local p = _M.page(cfg, 0)
+    local p = _M.pageOf(taskName, 0)
 
     local iv = defaults.interval or {}
     return {
@@ -419,7 +423,7 @@ return _M
 
 运行：`mcp__lrjl__script_control(action="run")` → `mcp__lrjl__get_ide_logs()`
 
-预期：`===== 结果: 20 通过 / 0 失败 / 0 跳过 =====`（数字以实际用例数为准，关键是 **0 失败**）
+预期：`===== 结果: 24 通过 / 0 失败 / 0 跳过 =====`（T1 的 8 条 + 本任务的 16 条；关键是 **0 失败**）
 
 - [ ] **Step 6: 提交**
 
@@ -624,8 +628,11 @@ git commit -m "feat: 新增任务协议与注册表"
 - Produces:
   - `pick(now, entries) -> entry|nil`：纯函数。`entries` 元素含 `{name, enabled, priority, nextRun}`
   - `settle(now, cfg, kind) -> { nextRun, resetStreak, result, stop }`：纯函数。`cfg` 含 `successInterval`/`failureInterval`（小时）；`kind` 取 `"success"`/`"taskEnd"`/`"recoverable"`/`"fatal"` 或 `nil`（视为 fatal）
-  - `setup(tasks, settings)`、`shouldStop()`、`requestStop()`、`nextDue(now)`、`runOnce(task, now)`、`idleSleepMs(now)`
+  - `setup(tasks)`、`shouldStop()`、`requestStop()`、`nextDue(now)`、`runOnce(entry, now)`、`idleSleepMs(now)`
   - 常量：`MAX_FAILURE_STREAK = 3`、`IDLE_MAX_MS = 30000`
+  - `nextDue` 返回的是 `entries()` 产出的条目（含 `.task`、`.enabled`、`.priority`、`.nextRun`、`.successInterval`、`.failureInterval`），`runOnce` 消费同一条目
+  - `runOnce` 传给任务的 `ctx` 为 `{ taskName = <string>, shouldStop = <function> }`。**只承诺这两个字段**；任务自己的 HUD 与计数由任务用 `ui.hud` 与局部变量自理（见 Task 7）
+  - `setup(tasks)` **不接收 settings** —— 调度器直接 `require("core.settings")`
 
 - [ ] **Step 1: 追加失败用例**
 
@@ -785,12 +792,18 @@ function _M.runOnce(entry, now)
     local cfg = {}
     local ok, kind, message
 
+    -- 注意：readConfig 不带参数。调度器执行任务时配置窗口早已关闭，
+    -- 没有 handle 可用；任务应从已持久化的配置文件读取（见 core/settings.pageOf）。
     if type(t.readConfig) == "function" then
         local okCfg, c = pcall(t.readConfig)
         if okCfg and type(c) == "table" then cfg = c end
     end
 
-    local okRun, err = pcall(t.run, cfg, { taskName = t.name })
+    -- ctx.shouldStop 必须真的可用，否则任务里的停止检查永远不会触发
+    local okRun, err = pcall(t.run, cfg, {
+        taskName = t.name,
+        shouldStop = _M.shouldStop,
+    })
     if okRun then
         kind, message = "success", nil
     else
@@ -1265,7 +1278,6 @@ local function caseFishing()
     a.eq(fishAssets.DO1.kind, "color", "DO1 是比色规则")
     a.eq(fishAssets.TARGET.kind, "color", "TARGET 是比色规则")
     a.eq(fishAssets.CLONE.kind, "image", "CLONE 是找图规则")
-    a.eq(fishAssets.TAP.kind, "click", "TAP 是点击规则")
 
     local d = fishConfig.defaults()
     a.eq(d.loopTime, 45, "默认单轮超时 45 秒")
@@ -1324,10 +1336,10 @@ return {
     -- 结算弹窗右上角 X 按钮模板（打包在 资源/saoif.rc，findPic 用裸文件名引用）
     -- 对应原 Python I_CLONE: roi=(915,173,961,217), threshold=0.8
     CLONE  = rule.image("Fishing_clone.png", { roi = { 915, 173, 961, 217 }, sim = 0.8 }),
-
-    -- 开始 / 提竿按钮（参数页可改，这里只给默认位置）
-    TAP    = rule.click(1173, 510),
 }
+
+-- 开始 / 提竿按钮不在这里：它的坐标是用户可配的，唯一来源是 config.defaults()
+-- 里的 clickX / clickY（避免与参数页出现两份会漂移的默认值）。
 ```
 
 - [ ] **Step 4: 抽取配置读取到 config.lua**
@@ -1337,6 +1349,8 @@ return {
 ```lua
 -- 脚本/tasks/fishing/config.lua
 -- 钓鱼参数：默认值与读取。默认值只在这里写一份（XML 的 默认值 属性仅作首次运行的初值）。
+local settings = require("core.settings")
+
 local _M = {}
 
 function _M.defaults()
@@ -1353,24 +1367,22 @@ function _M.defaults()
     }
 end
 
--- 从参数页读（handle 为 showUI 给的窗口句柄）。非数字输入回落默认值。
-function _M.read(handle)
+-- 从已持久化的配置读取（page1 = 钓鱼参数）。
+-- 注意：调度器执行任务时窗口早已关闭，没有 handle 可用，所以一律读配置文件；
+-- 参数页只负责写入，lrjl 在关窗保存时落盘。从未保存过的项回落 defaults()。
+function _M.load()
     local d = _M.defaults()
-    local function num(id, def)
-        local v = tonumber(getUIText(handle, 1, id))
-        if v == nil then return def end
-        return v
-    end
+    local p = settings.pageOf("fishing", 1)
     return {
-        loopTime    = num("edLoopTime", d.loopTime),
-        maxCatch    = num("edMaxCatch", d.maxCatch),
-        clickX      = num("edClickX", d.clickX),
-        clickY      = num("edClickY", d.clickY),
-        scanX       = num("edScanX", d.scanX),
-        zoneY1      = num("edZoneY1", d.zoneY1),
-        zoneY2      = num("edZoneY2", d.zoneY2),
-        showHud     = getUIChecked(handle, 1, "chkShowHud"),
-        debugColors = getUIChecked(handle, 1, "chkDebugColors"),
+        loopTime    = settings.num(p.edLoopTime, d.loopTime),
+        maxCatch    = settings.num(p.edMaxCatch, d.maxCatch),
+        clickX      = settings.num(p.edClickX, d.clickX),
+        clickY      = settings.num(p.edClickY, d.clickY),
+        scanX       = settings.num(p.edScanX, d.scanX),
+        zoneY1      = settings.num(p.edZoneY1, d.zoneY1),
+        zoneY2      = settings.num(p.edZoneY2, d.zoneY2),
+        showHud     = settings.bool(p.chkShowHud, d.showHud),
+        debugColors = settings.bool(p.chkDebugColors, d.debugColors),
     }
 end
 
@@ -1405,12 +1417,13 @@ local M = {
     interval = { success = 1, failure = 1 },
 }
 
-function M.readConfig(handle)
-    return config.read(handle)
+-- 不带 handle：调度器执行时没有窗口，配置一律从已持久化的文件读
+function M.readConfig()
+    return config.load()
 end
 
 function M.run(cfg, ctx)
-    cfg = cfg or config.defaults()
+    cfg = cfg or config.load()
     local successCount = 0
     local hudView = hud.new(cfg.showHud, "钓鱼中")
 
@@ -1542,8 +1555,8 @@ local config = require("tasks.fishing.config")
 local _M = {}
 
 function _M.run()
-    print("[fishing.test] 用默认参数直接跑一轮钓鱼")
-    task.run(config.defaults(), { taskName = "fishing" })
+    print("[fishing.test] 直接跑一轮钓鱼（参数取自已持久化的配置，缺失则用默认值）")
+    task.run(config.load(), { taskName = "fishing" })
 end
 
 return _M
@@ -1776,7 +1789,6 @@ local uiwin     = require("ui.window")
 local taskPaths = require("tasks.index")
 
 local ROWS = 12
-local HOUR = 3600
 
 -- ===== 启动自检：坏掉的框架不要去挂机 =====
 logger.info("SAOIF 自动助手启动")
@@ -1801,7 +1813,6 @@ local allMap  = {}
 
 -- ===== 界面 =====
 local action
-local emptyPool = rowpool.new("", 0)
 
 local function fillTaskRows(handle)
     -- 总览：只列启用任务，按 nextRun 升序
