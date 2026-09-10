@@ -238,6 +238,12 @@ local function caseFishing()
     a.eq(d.maxCatch, 0, "默认目标次数 0（不限）")
     a.eq(d.clickX, 1173, "默认按钮 X")
     a.eq(d.clickY, 510, "默认按钮 Y")
+
+    for _, name in ipairs({ "DO1", "DO2", "DO3", "DO4", "TARGET" }) do
+        local r = fishAssets[name]
+        a.ok(r ~= nil and r.kind == "color" and type(r.str) == "string" and #r.str > 0,
+            "assets." .. name .. " 是带非空比色串的 color 规则")
+    end
 end
 
 function _M.run()
