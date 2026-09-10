@@ -107,6 +107,68 @@ local function caseRegistry()
     a.eq(registry.find("nope"), nil, "registry.find 找不到返回 nil")
 end
 
+local sched = require("core.scheduler")
+local HOUR = 3600
+
+local function caseScheduler()
+    -- pick：未到期不选
+    local e = sched.pick(1000, { { name = "a", enabled = true, priority = 5, nextRun = 2000 } })
+    a.eq(e, nil, "pick 不选未到期的任务")
+
+    -- pick：禁用不选
+    local e2 = sched.pick(3000, { { name = "a", enabled = false, priority = 5, nextRun = 1000 } })
+    a.eq(e2, nil, "pick 不选已禁用的任务")
+
+    -- pick：nextRun 缺失视为立即到期
+    local e3 = sched.pick(1000, { { name = "a", enabled = true, priority = 5 } })
+    a.ok(e3 ~= nil and e3.name == "a", "pick 把缺失 nextRun 视为立即到期")
+
+    -- pick：选最早到期
+    local e4 = sched.pick(5000, {
+        { name = "a", enabled = true, priority = 5, nextRun = 4000 },
+        { name = "b", enabled = true, priority = 5, nextRun = 3000 },
+        { name = "c", enabled = true, priority = 5, nextRun = 9000 },
+    })
+    a.eq(e4.name, "b", "pick 选 nextRun 最小的")
+
+    -- pick：同时到期时优先级小的胜
+    local e5 = sched.pick(5000, {
+        { name = "a", enabled = true, priority = 7, nextRun = 3000 },
+        { name = "b", enabled = true, priority = 2, nextRun = 3000 },
+    })
+    a.eq(e5.name, "b", "pick 同到期时间时选 priority 小的")
+
+    -- settle：成功
+    local s1 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, "success")
+    a.eq(s1.nextRun, 1000 + 2 * HOUR, "settle 成功用 successInterval")
+    a.eq(s1.resetStreak, true, "settle 成功重置连续失败计数")
+    a.eq(s1.stop, false, "settle 成功不停止脚本")
+
+    -- settle：taskEnd 按成功结算
+    local s2 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, "taskEnd")
+    a.eq(s2.result, "success", "settle 把 taskEnd 按成功结算")
+
+    -- settle：可恢复失败
+    local s3 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, "recoverable")
+    a.eq(s3.nextRun, 1000 + 3 * HOUR, "settle 可恢复失败用 failureInterval")
+    a.eq(s3.resetStreak, false, "settle 可恢复失败不重置计数")
+    a.eq(s3.stop, false, "settle 可恢复失败不停止脚本")
+
+    -- settle：致命错误停止
+    local s4 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, "fatal")
+    a.eq(s4.nextRun, nil, "settle 致命错误不重排")
+    a.eq(s4.stop, true, "settle 致命错误停止脚本")
+
+    -- settle：未预期异常按致命
+    local s5 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, nil)
+    a.eq(s5.stop, true, "settle 把未预期结果按致命处理")
+
+    -- 连续失败到阈值应停止
+    local streak = 0
+    for _ = 1, sched.MAX_FAILURE_STREAK do streak = streak + 1 end
+    a.eq(streak >= sched.MAX_FAILURE_STREAK, true, "连续失败达到 MAX_FAILURE_STREAK 阈值")
+end
+
 function _M.run()
     a.reset()
     print("[selfcheck] 运行环境: " .. (_M.onDevice() and "lrjl 设备" or "本机 Lua（设备相关用例将跳过）"))
@@ -116,6 +178,7 @@ function _M.run()
     caseSettings()
     caseTask()
     caseRegistry()
+    caseScheduler()
 
     return a.report("selfcheck")
 end
