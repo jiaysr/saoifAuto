@@ -1,4 +1,4 @@
--- 脚本/core/pixel.lua
+-- 脚本/vision/pixel.lua
 -- 像素/颜色工具
 -- getScreenPixel 返回的 arr 颜色为 BBGGRR（十进制，BGR 序）；getPixelColor 返回值为 RRGGBB 序。
 -- 比色串格式："x|y|BBGGRR-偏色,..."

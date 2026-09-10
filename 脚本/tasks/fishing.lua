@@ -4,7 +4,7 @@
 -- 设备分辨率 720x1280，横屏显示（rotate=1），脚本坐标基于横屏 1280x720
 
 local logger = require("core.logger")
-local pixel = require("core.pixel")
+local pixel = require("vision.pixel")
 local dispatcher = require("core.dispatcher")
 
 local M = { name = "钓鱼" }

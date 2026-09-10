@@ -169,6 +169,29 @@ local function caseScheduler()
     a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK), true, "shouldGiveUp 达到阈值返回 true")
 end
 
+local rule = require("vision.rule")
+
+local function caseRule()
+    local c = rule.color("1|2|FFFFFF-000000", { tol = 20, rate = 0.5 })
+    a.eq(c.kind, "color", "rule.color 生成 color 规则")
+    a.eq(c.tol, 20, "rule.color 保留自定义 tol")
+    a.eq(c.rate, 0.5, "rule.color 保留自定义 rate")
+
+    local c2 = rule.color("1|2|FFFFFF-000000")
+    a.eq(c2.tol, 15, "rule.color tol 默认 15")
+    a.eq(c2.rate, 0.6, "rule.color rate 默认 0.6")
+
+    local im = rule.image("a.png", { roi = { 1, 2, 3, 4 }, sim = 0.9 })
+    a.eq(im.kind, "image", "rule.image 生成 image 规则")
+    a.eq(im.file, "a.png", "rule.image 保留文件名")
+    a.eq(im.sim, 0.9, "rule.image 保留自定义相似度")
+
+    local cl = rule.click(10, 20)
+    a.eq(cl.kind, "click", "rule.click 生成 click 规则")
+    a.eq(cl.x, 10, "rule.click 保留 x")
+    a.eq(cl.y, 20, "rule.click 保留 y")
+end
+
 function _M.run()
     a.reset()
     print("[selfcheck] 运行环境: " .. (_M.onDevice() and "lrjl 设备" or "本机 Lua（设备相关用例将跳过）"))
@@ -179,6 +202,7 @@ function _M.run()
     caseTask()
     caseRegistry()
     caseScheduler()
+    caseRule()
 
     return a.report("selfcheck")
 end
