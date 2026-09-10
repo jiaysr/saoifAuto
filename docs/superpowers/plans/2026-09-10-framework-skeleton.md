@@ -1094,7 +1094,7 @@ git commit -m "refactor: 比色模块移入 vision/ 并新增规则对象"
 **Interfaces:**
 - Consumes: `core.logger`
 - Produces:
-  - `require("ui.rowpool")` → `{ new(prefix, rows) -> pool, fill(handle, page, list, fmt), indexOf(id) -> number|nil, taskAt(i) -> item, visibleCount() }`
+  - `require("ui.rowpool")` → `{ new(prefix, rows) -> pool, fill(pool, handle, page, list, fmt), indexOf(id, prefix?) -> number|nil, matchAny(id, prefixes) -> index, prefix | nil, taskAt(pool, i) -> item, visibleCount(pool) -> number }`
   - `require("ui.window")` → `{ show(uifile, w, h, onEvent) -> configJson, CLOSE_SAVE = true, CLOSE_CANCEL = false }`
   - `require("ui.hud")` → `{ new(enabled, title) -> hud, hud:update(text), hud:close() }`
 
@@ -1111,6 +1111,14 @@ local function caseRowPool()
     a.eq(rowpool.indexOf(nil), nil, "indexOf 对 nil 返回 nil")
     a.eq(p.rows, 4, "行池记录行数")
     a.eq(p.prefix, "btnRow", "行池记录前缀")
+
+    -- matchAny 是 Task 8 入口的点击路由，必须覆盖
+    a.eq(rowpool.matchAny("btnRow3", { "btnRow", "btnAll" }), 3, "matchAny 命中第一个前缀")
+    local mi, mp = rowpool.matchAny("btnAll5", { "btnRow", "btnAll" })
+    a.eq(mi, 5, "matchAny 命中第二个前缀时返回行号")
+    a.eq(mp, "btnAll", "matchAny 命中第二个前缀时返回该前缀")
+    a.eq(rowpool.matchAny("btnZzz", { "btnRow", "btnAll" }), nil, "matchAny 无匹配时返回 nil")
+    a.eq(rowpool.matchAny(nil, { "btnRow" }), nil, "matchAny 对 nil 返回 nil")
 end
 ```
 
