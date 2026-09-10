@@ -328,10 +328,18 @@ local rule = require("vision.rule")
 return {
     DO1    = rule.color("1182|485|00CFCF-0F0F0F,...", { tol = 15, rate = 0.6 }),
     TARGET = rule.color("499|108|F7F9FB-0F0F0F,...",  { tol = 15, rate = 0.6 }),
-    CLONE  = rule.image("Fishing_clone.png", { roi = {915,173,961,217}, sim = 0.8 }),
-    TAP    = rule.click(1173, 510),
+    CLONE  = rule.image("Fishing_clone.png", {
+        roi = { 915, 173, 961, 217 },   -- 搜索区域 46x44
+        halfW = 20, halfH = 15,         -- 模板 40x31 的一半，点击中心按它偏移
+        sim = 0.8,
+    }),
 }
 ```
+
+> 点击坐标**不**放进 assets：它是用户可配项，唯一来源是 `config.defaults()` 的
+> `clickX`/`clickY`，避免出现两份会漂移的默认值（R3）。
+> `halfW`/`halfH` 必须是模板半尺寸而非 ROI 半尺寸 —— ROI 是搜索区域、比模板大，
+> 用 ROI 会点偏且与匹配位置无关（R15）。
 
 ```lua
 -- 脚本/tasks/fishing/task.lua 里使用
@@ -339,9 +347,9 @@ local rule = require("vision.rule")
 local A = require("tasks.fishing.assets")
 
 if rule.appear(A.DO1) then
-    rule.click(A.TAP)
+    tap(cfg.clickX, cfg.clickY)          -- 按钮坐标来自配置，不在 assets 里
 elseif rule.appearThenClick(A.CLONE) then
-    ctx.stats.hit = ctx.stats.hit + 1
+    hit = hit + 1                        -- 本轮计数是任务自己的局部变量（§6）
 elseif rule.waitAppear(A.TARGET, 6000) then
     ...
 end

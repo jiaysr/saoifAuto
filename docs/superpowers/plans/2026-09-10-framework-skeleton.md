@@ -1284,7 +1284,7 @@ git commit -m "feat: 新增界面能力层（行池 / 窗口 / HUD）"
 - Consumes: `vision.rule`、`vision.pixel`、`ui.hud`、`core.exception`、`core.logger`
 - Produces:
   - `require("tasks.fishing.task")` → 符合协议的任务表（`name="fishing"`, `title="钓鱼"`, `ui="tasks/fishing.ui"`）
-  - `require("tasks.fishing.assets")` → `{ DO1, DO2, DO3, DO4, TARGET, CLONE, TAP }`，前五项为 `rule.color`，`CLONE` 为 `rule.image`，`TAP` 为 `rule.click`
+  - `require("tasks.fishing.assets")` → `{ DO1, DO2, DO3, DO4, TARGET, CLONE }`，前五项为 `rule.color`，`CLONE` 为 `rule.image`（带 `halfW=20,halfH=15`）。**没有 `TAP`** —— 点击坐标唯一来源是 `config.defaults()` 的 `clickX/clickY`，见 R3
   - `require("tasks.fishing.config")` → `{ defaults() -> table, load() -> cfg }`（`load` 从已持久化配置的 page1 读，见 R1）
 
 - [ ] **Step 1: 追加失败用例**
