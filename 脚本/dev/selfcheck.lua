@@ -200,6 +200,18 @@ local function caseRule()
     a.eq(p2y, 200, "tapPoint 缺省半高时不偏移 y")
 end
 
+local rowpool = require("ui.rowpool")
+
+local function caseRowPool()
+    local p = rowpool.new("btnRow", 4)
+    a.eq(rowpool.indexOf("btnRow0"), 0, "indexOf 解析出第 0 行")
+    a.eq(rowpool.indexOf("btnRow3"), 3, "indexOf 解析出第 3 行")
+    a.eq(rowpool.indexOf("btnAll2"), nil, "indexOf 对不匹配的 id 返回 nil")
+    a.eq(rowpool.indexOf(nil), nil, "indexOf 对 nil 返回 nil")
+    a.eq(p.rows, 4, "行池记录行数")
+    a.eq(p.prefix, "btnRow", "行池记录前缀")
+end
+
 function _M.run()
     a.reset()
     print("[selfcheck] 运行环境: " .. (_M.onDevice() and "lrjl 设备" or "本机 Lua（设备相关用例将跳过）"))
@@ -211,6 +223,7 @@ function _M.run()
     caseRegistry()
     caseScheduler()
     caseRule()
+    caseRowPool()
 
     return a.report("selfcheck")
 end
