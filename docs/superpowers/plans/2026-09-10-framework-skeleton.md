@@ -898,7 +898,11 @@ git commit -m "feat: 新增到期时间调度器"
   - `require("vision.pixel")` → 与现在 `core/pixel` 完全相同的接口（`parsePoints` / `matchRatio` / `dumpPoints` / `findPerfectZone` / `findNeedle`）
   - `require("vision.rule")` → `{ color(str, opt), image(file, opt), click(x, y), appear(r), waitAppear(r, ms), clickRule(r), appearThenClick(r), dumpPoints(str, label) }`
     - `color` opt：`{ tol = 15, rate = 0.6 }`
-    - `image` opt：`{ roi = {x1,y1,x2,y2}, sim = 0.8, delta = "101010" }`
+    - `image` opt：`{ roi = {x1,y1,x2,y2}, halfW = 0, halfH = 0, sim = 0.8, delta = "101010" }`
+      - `roi` 是**搜索区域**（比模板大）；`halfW`/`halfH` 是**模板半宽半高**，点击中心按它偏移。
+        缺省 0 表示点匹配到的左上角。**漏传会让按钮中心点击静默退化成左上角点击。**
+    - `require("vision.image")` → `{ tapPoint(rule, x, y) -> px, py, findCenter(rule) -> cx, cy | nil }`
+      - `tapPoint` 是纯函数，唯一按模板半尺寸算点击中心的地方；selfcheck 直接钉住它。
     - `rule` 对象带 `kind` 字段（`"color"` / `"image"` / `"click"`）
 
 - [ ] **Step 1: 追加失败用例**
