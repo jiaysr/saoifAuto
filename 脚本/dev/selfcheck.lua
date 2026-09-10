@@ -210,6 +210,12 @@ local function caseRowPool()
     a.eq(rowpool.indexOf(nil), nil, "indexOf 对 nil 返回 nil")
     a.eq(p.rows, 4, "行池记录行数")
     a.eq(p.prefix, "btnRow", "行池记录前缀")
+    a.eq(rowpool.matchAny("btnRow3", { "btnRow", "btnAll" }), 3, "matchAny 命中第一个前缀")
+    local mi, mp = rowpool.matchAny("btnAll5", { "btnRow", "btnAll" })
+    a.eq(mi, 5, "matchAny 命中第二个前缀时返回行号")
+    a.eq(mp, "btnAll", "matchAny 命中第二个前缀时返回该前缀")
+    a.eq(rowpool.matchAny("btnZzz", { "btnRow", "btnAll" }), nil, "matchAny 无匹配时返回 nil")
+    a.eq(rowpool.matchAny(nil, { "btnRow" }), nil, "matchAny 对 nil 返回 nil")
 end
 
 function _M.run()
