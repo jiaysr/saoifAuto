@@ -588,7 +588,7 @@ function _M.find(name) return _byName[name] end
 return _M
 ```
 
-- [ ] **Step 5: 实现任务清单（先放一个占位任务以便自检）**
+- [ ] **Step 5: 实现任务清单（本任务下故意为空列表）**
 
 创建 `脚本/tasks/index.lua`（Task 7 会加入真实钓鱼任务）：
 
@@ -1961,7 +1961,7 @@ git commit -m "feat: 主界面改为三标签页行池布局，入口接入调�
 - Create: `脚本/vision/ocr.lua`
 - Create: `脚本/tasks/daily/README.md`、`脚本/tasks/board/README.md`、`脚本/tasks/activity/README.md`
 - Create: `界面/tasks/daily.ui`、`界面/tasks/board.ui`、`界面/tasks/activity.ui`
-- Delete: `脚本/spike/`、`界面/spike_*.ui`
+- Delete: `脚本/spike/`、`界面/spike_*.ui`、`脚本/core/dispatcher.lua`
 - Modify: `脚本/core/logger.lua`（若 Task 7 未改）
 
 **Interfaces:**
@@ -2081,6 +2081,9 @@ return _M
 ```bash
 git rm -r 脚本/spike
 git rm 界面/spike_main.ui 界面/spike_config.ui 界面/spike_overview.ui
+# core/dispatcher.lua 已被 core/registry.lua 取代；Task 7 删掉唯一引用者
+# （tasks/fishing.lua）后它就成了孤儿，在此清除
+git rm 脚本/core/dispatcher.lua
 ```
 
 - [ ] **Step 4: 最终验证**
