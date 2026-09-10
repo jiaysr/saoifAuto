@@ -2,6 +2,7 @@
 -- 规则对象：把「特征数据」声明成数据，把「怎么匹配/点击」收敛到这里。
 -- 业务代码里不再出现裸露的比色串与坐标。
 local pixel = require("vision.pixel")
+local image = require("vision.image")
 
 local _M = {}
 
@@ -26,6 +27,8 @@ function _M.image(file, opt)
         kind  = "image",
         file  = file,
         roi   = opt.roi,
+        halfW = opt.halfW or 0,
+        halfH = opt.halfH or 0,
         sim   = opt.sim   or DEFAULTS.image.sim,
         delta = opt.delta or DEFAULTS.image.delta,
     }
@@ -42,10 +45,7 @@ function _M.appear(r)
         local m, n = pixel.matchRatio(r.str, r.tol)
         return n > 0 and m >= n * r.rate
     elseif r.kind == "image" then
-        if not r.roi then return false end
-        -- findPic 返回 ret, x, y；ret 为图片索引，-1 表示未找到
-        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        return ret ~= -1 and x ~= -1 and y ~= -1
+        return image.findCenter(r) ~= nil
     end
     return false
 end
@@ -63,11 +63,10 @@ function _M.clickRule(r)
     if r.kind == "click" then
         tap(r.x, r.y)
         return true
-    elseif r.kind == "image" and r.roi then
-        -- findPic 返回 ret, x, y；ret 为图片索引，-1 表示未找到
-        local ret, x, y = findPic(r.roi[1], r.roi[2], r.roi[3], r.roi[4], r.file, r.delta, 0, r.sim)
-        if ret ~= -1 and x ~= -1 and y ~= -1 then
-            tap(x + math.floor((r.roi[3] - r.roi[1]) / 2), y + math.floor((r.roi[4] - r.roi[2]) / 2))
+    elseif r.kind == "image" then
+        local cx, cy = image.findCenter(r)
+        if cx then
+            tap(cx, cy)
             return true
         end
     end

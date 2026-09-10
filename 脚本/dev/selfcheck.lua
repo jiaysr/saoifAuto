@@ -170,6 +170,7 @@ local function caseScheduler()
 end
 
 local rule = require("vision.rule")
+local image = require("vision.image")
 
 local function caseRule()
     local c = rule.color("1|2|FFFFFF-000000", { tol = 20, rate = 0.5 })
@@ -190,6 +191,13 @@ local function caseRule()
     a.eq(cl.kind, "click", "rule.click 生成 click 规则")
     a.eq(cl.x, 10, "rule.click 保留 x")
     a.eq(cl.y, 20, "rule.click 保留 y")
+
+    local p1x, p1y = image.tapPoint({ halfW = 20, halfH = 15 }, 100, 200)
+    a.eq(p1x, 120, "tapPoint 按模板半宽偏移 x")
+    a.eq(p1y, 215, "tapPoint 按模板半高偏移 y")
+    local p2x, p2y = image.tapPoint({}, 100, 200)
+    a.eq(p2x, 100, "tapPoint 缺省半宽时不偏移 x")
+    a.eq(p2y, 200, "tapPoint 缺省半高时不偏移 y")
 end
 
 function _M.run()
