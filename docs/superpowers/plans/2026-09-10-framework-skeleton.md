@@ -1278,7 +1278,6 @@ git commit -m "feat: 新增界面能力层（行池 / 窗口 / HUD）"
 - Create: `界面/tasks/fishing.ui`
 - Delete: `脚本/tasks/fishing.lua`
 - Modify: `脚本/tasks/index.lua`
-- Modify: `脚本/core/logger.lua`（加任务标签前缀能力）
 - Modify: `脚本/dev/selfcheck.lua`（追加 `caseFishing`）
 
 **Interfaces:**
@@ -1286,7 +1285,7 @@ git commit -m "feat: 新增界面能力层（行池 / 窗口 / HUD）"
 - Produces:
   - `require("tasks.fishing.task")` → 符合协议的任务表（`name="fishing"`, `title="钓鱼"`, `ui="tasks/fishing.ui"`）
   - `require("tasks.fishing.assets")` → `{ DO1, DO2, DO3, DO4, TARGET, CLONE, TAP }`，前五项为 `rule.color`，`CLONE` 为 `rule.image`，`TAP` 为 `rule.click`
-  - `require("tasks.fishing.config")` → `{ defaults() -> table, read(handle) -> cfg }`
+  - `require("tasks.fishing.config")` → `{ defaults() -> table, load() -> cfg }`（`load` 从已持久化配置的 page1 读，见 R1）
 
 - [ ] **Step 1: 追加失败用例**
 
@@ -1463,12 +1462,18 @@ function M.run(cfg, ctx)
     end
 
     logger.info("=== 开始钓鱼 ===")
+    -- 这条是设备端唯一能证明 config.load() 真从 page1 读到值的证据，不要删
+    logger.info(string.format("参数: 单轮超时=%ds 目标次数=%d 按钮=(%d,%d) 扫描列X=%d 区域Y=%d~%d",
+        cfg.loopTime, cfg.maxCatch, cfg.clickX, cfg.clickY, cfg.scanX, cfg.zoneY1, cfg.zoneY2))
 
     setSnapCacheTime(0)
 
     if cfg.debugColors then
         logger.info("首帧颜色采样:")
         rule.dumpPoints(A.DO1.str, "DO1")
+        rule.dumpPoints(A.DO2.str, "DO2")
+        rule.dumpPoints(A.DO3.str, "DO3")
+        rule.dumpPoints(A.DO4.str, "DO4")
         rule.dumpPoints(A.TARGET.str, "Target")
     end
 
@@ -1707,7 +1712,7 @@ return {
 - [ ] **Step 11: 提交**
 
 ```bash
-git add 脚本/tasks 界面/tasks/fishing.ui
+git add 脚本/tasks 界面/tasks/fishing.ui 脚本/dev/selfcheck.lua
 git rm 脚本/tasks/fishing.lua
 git commit -m "refactor: 钓鱼迁移为符合协议的任务目录"
 ```
