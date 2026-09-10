@@ -30,8 +30,11 @@ local function caseState()
         a.skip("state 读写往返", "需要 lrjl 文件 API")
         return
     end
+    -- 任务名每次运行都不同：否则上一轮写进 state.json 的记录会让"未知任务"前提失效
+    -- （state 记录跨进程持久化，本用例必须可重复运行）
+    local name = "selfcheck_" .. tostring(os.time())
     st.reset()
-    local rec = st.get("fishing")
+    local rec = st.get(name)
     a.eq(type(rec), "table", "state.get 对未知任务返回空表")
     a.eq(rec.nextRun, nil, "新任务的 nextRun 为空（视为立即到期）")
 
@@ -40,7 +43,7 @@ local function caseState()
     a.ok(st.save(), "state.save 写入成功")
 
     st.reset()
-    local again = st.get("fishing")
+    local again = st.get(name)
     a.eq(again.nextRun, 1700000000, "重新加载后 nextRun 保留")
     a.eq(again.successCount, 7, "重新加载后 successCount 保留")
 end
