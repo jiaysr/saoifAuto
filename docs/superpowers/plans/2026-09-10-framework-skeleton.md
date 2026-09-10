@@ -1724,7 +1724,6 @@ git commit -m "refactor: 钓鱼迁移为符合协议的任务目录"
 **Files:**
 - Modify: `界面/saoif.ui`（重写为总览 / 配置 / 全局 三标签页 + 行池）
 - Modify: `脚本/saoif.lua`（正式入口）
-- Create: `脚本/core/logger.lua`（增强：可选任务标签）
 
 **Interfaces:**
 - Consumes: `core.registry`、`core.scheduler`、`core.state`、`core.settings`、`ui.rowpool`、`ui.window`、`tasks.index`、`dev.selfcheck`
@@ -1790,7 +1789,6 @@ git commit -m "refactor: 钓鱼迁移为符合协议的任务目录"
 		<垂直布局 宽度="-1" 高度="-1" 背景="#fff2f4f8">
 			<垂直布局 宽度="-1" 高度="-2" 背景="#ffffffff" 边距="12,12,12,0" 内边距="16,12,16,14">
 				<文本框 文本="【运行】" 字体大小="14" 字体颜色="#ff007aff" 宽度="-1" 高度="-2"/>
-				<多选框 id="chkGlobalHud" 选中="true" 文本="屏幕显示运行状态 HUD" 字体大小="14" 宽度="-1" 高度="-2" 边距="0,10,0,0"/>
 				<水平布局 宽度="-1" 高度="-2" 背景="#00ffffff" 边距="0,10,0,0">
 					<文本框 文本="最大连续失败次数" 字体大小="15" 字体颜色="#ff333333" 宽度="-2" 高度="56"/>
 					<输入框 id="edMaxFail" 输入类型="1" 默认值="3" 宽度="120" 高度="56" 边距="12,0,0,0"/>
@@ -1845,7 +1843,6 @@ logger.info(string.format("已装载 %d 个任务", #tasks))
 
 local ovPool  = rowpool.new("btnRow", ROWS)
 local allPool = rowpool.new("btnAll", ROWS)
-local allMap  = {}
 
 -- ===== 界面 =====
 local action
@@ -1877,15 +1874,11 @@ local function fillTaskRows(handle)
     setUIText(handle, 0, "lblOvEmpty", #enabled == 0 and "没有启用的任务" or "")
 
     -- 配置：全部任务
-    allMap = {}
     rowpool.fill(allPool, handle, 1, tasks, function(t)
         local s = settings.read(t.name, t)
         local tail = s.enabled and "已启用" or "已禁用"
         return string.format("%s　（%s）", t.title, tail)
     end)
-    for i = 0, ROWS - 1 do
-        allMap[i] = allPool.map[i]
-    end
     setUIText(handle, 1, "lblCfgSummary",
         string.format("共 %d 个任务（含禁用）", #tasks))
 end
@@ -1902,9 +1895,13 @@ local function onEvent(handle, event, arg1, arg2)
         end
         local idx, prefix = rowpool.matchAny(arg2, { "btnRow", "btnAll" })
         if idx then
-            local t = (prefix == "btnRow") and ovPool.map[idx] or allMap[idx]
-            t = t and (t.task or t) or nil
-            if t then
+            -- 按前缀选定行池，再按行号取任务。用 if 而非 and/or ——
+            -- `a and b or c` 在 b 为 nil 时会穿透去求值 c，从而查错行池。
+            local pool = (prefix == "btnRow") and ovPool or allPool
+            local entry = rowpool.taskAt(pool, idx)
+            if entry then
+                -- 总览页存 {task=,priority=,nextRun=}，配置页存任务本身
+                local t = entry.task or entry
                 action = { kind = "open", task = t }
                 uiwin.close(handle, uiwin.CLOSE_SAVE)
             end
@@ -1952,6 +1949,13 @@ end
 logger.info("========== 进入调度主循环 ==========")
 scheduler.setup(tasks)
 
+-- 读全局设置：连续失败阈值（全局标签页的 edMaxFail）。
+-- 不读就等于界面上有个什么都不做的控件 —— 会误导用户以为设置了什么。
+local gcfg  = settings.decode(getUIConfig and getUIConfig("saoif.config") or "")
+local gpage = settings.page(gcfg, 2)          -- page2 = 全局标签页（总览0 / 配置1 / 全局2）
+scheduler.MAX_FAILURE_STREAK = settings.num(gpage.edMaxFail, scheduler.MAX_FAILURE_STREAK)
+logger.info(string.format("连续失败阈值 = %d", scheduler.MAX_FAILURE_STREAK))
+
 while not scheduler.shouldStop() do
     local now = os.time()
     local entry = scheduler.nextDue(now)
@@ -1998,7 +2002,6 @@ git commit -m "feat: 主界面改为三标签页行池布局，入口接入调�
 - Create: `脚本/tasks/daily/README.md`、`脚本/tasks/board/README.md`、`脚本/tasks/activity/README.md`
 - Create: `界面/tasks/daily.ui`、`界面/tasks/board.ui`、`界面/tasks/activity.ui`
 - Delete: `脚本/spike/`、`界面/spike_*.ui`、`脚本/core/dispatcher.lua`
-- Modify: `脚本/core/logger.lua`（若 Task 7 未改）
 
 **Interfaces:**
 - Consumes: 无
