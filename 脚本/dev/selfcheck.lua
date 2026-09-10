@@ -3,6 +3,8 @@
 -- 因此本文件也能在电脑上用标准 Lua 跑：lua 脚本/dev/selfcheck.lua
 local a  = require("dev.assert")
 local ex = require("core.exception")
+local task = require("core.task")
+local registry = require("core.registry")
 
 local _M = {}
 
@@ -71,6 +73,40 @@ local function caseSettings()
     a.eq(cfg.successInterval, 2, "无配置时 successInterval 回落默认")
 end
 
+local function caseTask()
+    local ok = task.validate({})   -- 缺 name 与 run
+    a.eq(ok, false, "缺 name/run 的任务校验失败")
+
+    local ok2, err2 = task.validate({ name = "x" })
+    a.eq(ok2, false, "缺 run 的任务校验失败")
+    a.ok(type(err2) == "string" and #err2 > 0, "校验失败返回原因文字")
+
+    local t = task.normalize({ name = "x", run = function() end })
+    a.eq(t.enabled, true, "normalize 补 enabled 默认 true")
+    a.eq(t.priority, 5, "normalize 补 priority 默认 5")
+    a.eq(t.interval.success, 1, "normalize 补 interval.success 默认 1")
+    a.eq(t.interval.failure, 1, "normalize 补 interval.failure 默认 1")
+    a.eq(t.limitTime, 0, "normalize 补 limitTime 默认 0")
+    a.eq(t.limitCount, 0, "normalize 补 limitCount 默认 0")
+
+    local t2 = task.normalize({ name = "y", run = function() end, priority = 2,
+                                interval = { success = 4 } })
+    a.eq(t2.priority, 2, "normalize 不覆盖已有 priority")
+    a.eq(t2.interval.success, 4, "normalize 不覆盖已有 interval.success")
+    a.eq(t2.interval.failure, 1, "normalize 补齐缺失的 interval.failure")
+end
+
+local function caseRegistry()
+    local fake = {
+        { name = "a", run = function() end },
+        { name = "b", run = function() end, priority = 1 },
+    }
+    registry.loadTable(fake)
+    a.eq(#registry.all(), 2, "registry.loadTable 装入 2 个任务")
+    a.ok(registry.find("a") ~= nil, "registry.find 按名查找")
+    a.eq(registry.find("nope"), nil, "registry.find 找不到返回 nil")
+end
+
 function _M.run()
     a.reset()
     print("[selfcheck] 运行环境: " .. (_M.onDevice() and "lrjl 设备" or "本机 Lua（设备相关用例将跳过）"))
@@ -78,6 +114,8 @@ function _M.run()
     caseException()
     caseState()
     caseSettings()
+    caseTask()
+    caseRegistry()
 
     return a.report("selfcheck")
 end
