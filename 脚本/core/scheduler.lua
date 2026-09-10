@@ -73,13 +73,18 @@ function _M.nextDue(now)
     return _M.pick(now, _M.entries())
 end
 
+-- 纯函数：连续失败是否已达放弃阈值（达阈值 → 停止脚本等人工介入）
+function _M.shouldGiveUp(streak)
+    return (streak or 0) >= _M.MAX_FAILURE_STREAK
+end
+
 -- 执行一次任务，内部消化异常，绝不冒泡到主循环
 function _M.runOnce(entry, now)
     local t = entry.task
     logger.info(string.format("========== 开始任务: %s ==========", t.title))
 
     local cfg = {}
-    local ok, kind, message
+    local kind, message
 
     -- 注意：readConfig 不带参数。调度器执行任务时配置窗口早已关闭，
     -- 没有 handle 可用；任务应从已持久化的配置文件读取（见 core/settings.pageOf）。
@@ -123,7 +128,7 @@ function _M.runOnce(entry, now)
     end
 
     if s.stop then return true end
-    if rec.failureStreak >= _M.MAX_FAILURE_STREAK then
+    if _M.shouldGiveUp(rec.failureStreak) then
         logger.error(string.format("%s 连续失败 %d 次，停止脚本等待人工介入",
             t.title, rec.failureStreak))
         return true

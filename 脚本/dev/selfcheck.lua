@@ -164,9 +164,9 @@ local function caseScheduler()
     a.eq(s5.stop, true, "settle 把未预期结果按致命处理")
 
     -- 连续失败到阈值应停止
-    local streak = 0
-    for _ = 1, sched.MAX_FAILURE_STREAK do streak = streak + 1 end
-    a.eq(streak >= sched.MAX_FAILURE_STREAK, true, "连续失败达到 MAX_FAILURE_STREAK 阈值")
+    a.eq(sched.shouldGiveUp(0), false, "shouldGiveUp 对 0 次失败返回 false")
+    a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK - 1), false, "shouldGiveUp 未达阈值返回 false")
+    a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK), true, "shouldGiveUp 达到阈值返回 true")
 end
 
 function _M.run()

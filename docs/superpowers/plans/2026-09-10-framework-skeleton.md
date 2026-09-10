@@ -693,10 +693,10 @@ local function caseScheduler()
     local s5 = sched.settle(1000, { successInterval = 2, failureInterval = 3 }, nil)
     a.eq(s5.stop, true, "settle 把未预期结果按致命处理")
 
-    -- 连续失败到阈值应停止
-    local streak = 0
-    for _ = 1, sched.MAX_FAILURE_STREAK do streak = streak + 1 end
-    a.eq(streak >= sched.MAX_FAILURE_STREAK, true, "连续失败达到 MAX_FAILURE_STREAK 阈值")
+    -- 连续失败到阈值应停止（纯函数，真正覆盖生产决策）
+    a.eq(sched.shouldGiveUp(0), false, "shouldGiveUp 对 0 次失败返回 false")
+    a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK - 1), false, "shouldGiveUp 未达阈值返回 false")
+    a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK), true, "shouldGiveUp 达到阈值返回 true")
 end
 ```
 
@@ -764,6 +764,11 @@ function _M.settle(now, cfg, kind)
     return { nextRun = nil, resetStreak = false, result = "fatal", stop = true }
 end
 
+-- 纯函数：连续失败是否已达放弃阈值（达阈值 → 停止脚本等人工介入）
+function _M.shouldGiveUp(streak)
+    return (streak or 0) >= _M.MAX_FAILURE_STREAK
+end
+
 -- 组装当前候选条目（融合任务默认值、用户设置、运行时状态）
 function _M.entries(tasks)
     tasks = tasks or _tasks
@@ -790,7 +795,7 @@ function _M.runOnce(entry, now)
     logger.info(string.format("========== 开始任务: %s ==========", t.title))
 
     local cfg = {}
-    local ok, kind, message
+    local kind, message
 
     -- 注意：readConfig 不带参数。调度器执行任务时配置窗口早已关闭，
     -- 没有 handle 可用；任务应从已持久化的配置文件读取（见 core/settings.pageOf）。
@@ -834,7 +839,7 @@ function _M.runOnce(entry, now)
     end
 
     if s.stop then return true end
-    if rec.failureStreak >= _M.MAX_FAILURE_STREAK then
+    if _M.shouldGiveUp(rec.failureStreak) then
         logger.error(string.format("%s 连续失败 %d 次，停止脚本等待人工介入",
             t.title, rec.failureStreak))
         return true
