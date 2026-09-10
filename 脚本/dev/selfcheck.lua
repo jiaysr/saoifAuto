@@ -169,6 +169,82 @@ local function caseScheduler()
     a.eq(sched.shouldGiveUp(sched.MAX_FAILURE_STREAK), true, "shouldGiveUp 达到阈值返回 true")
 end
 
+-- runOnce 的数据全从 state / settings / 任务表取，且调度器是在调用时查模块表，
+-- 因此可以整体打桩，在设备与本机 Lua 上都能覆盖「结算 → 连续失败 → 停止」的接线。
+local function caseRunOnce()
+    local realGet, realSave, realRead = st.get, st.save, settings.read
+    local realMax = sched.MAX_FAILURE_STREAK
+
+    local store = {}
+    st.get  = function(name) store[name] = store[name] or {}; return store[name] end
+    st.save = function() return true end
+    settings.read = function()
+        return { enabled = true, priority = 5, successInterval = 2, failureInterval = 3 }
+    end
+    sched.MAX_FAILURE_STREAK = 3
+
+    local function mkTask(name, runFn)
+        return { name = name, title = "自检任务-" .. name, run = runFn,
+                 readConfig = function() return {} end }
+    end
+    local function mkEntry(t)
+        return { name = t.name, task = t, enabled = true, priority = 5,
+                 successInterval = 2, failureInterval = 3 }
+    end
+
+    local now = 1000000
+
+    local okAll, errAll = pcall(function()
+        -- 成功：按 successInterval 重排，清零失败计数并累计成功次数
+        local tOk = mkTask("ok", function() end)
+        local rOk = sched.runOnce(mkEntry(tOk), now)
+        a.eq(rOk, false, "runOnce 成功返回 false（继续调度）")
+        a.eq(store.ok.nextRun, now + 2 * HOUR, "runOnce 成功按 successInterval 重排")
+        a.eq(store.ok.failureStreak, 0, "runOnce 成功把 failureStreak 归零")
+        a.eq(store.ok.successCount, 1, "runOnce 成功累计 successCount")
+
+        -- 可恢复失败：按 failureInterval 重排，计数 +1，不停止
+        local tRec = mkTask("rec", function() error(ex.recoverable("卡住")) end)
+        local rRec = sched.runOnce(mkEntry(tRec), now)
+        a.eq(rRec, false, "runOnce 可恢复失败返回 false")
+        a.eq(store.rec.nextRun, now + 3 * HOUR, "runOnce 可恢复失败按 failureInterval 重排")
+        a.eq(store.rec.failureStreak, 1, "runOnce 可恢复失败累计 failureStreak")
+        a.eq(store.rec.lastResult, "recoverable", "runOnce 记录 lastResult=recoverable")
+
+        -- 裸错误按 fatal：不重排，返回 true 停止脚本
+        local tFatal = mkTask("fatal", function() error("boom") end)
+        local rFatal = sched.runOnce(mkEntry(tFatal), now)
+        a.eq(rFatal, true, "runOnce 未预期错误返回 true（停止脚本）")
+        a.eq(store.fatal.nextRun, nil, "runOnce 致命错误不重排")
+        a.eq(store.fatal.lastResult, "fatal", "runOnce 把裸错误记为 fatal")
+
+        -- 连续三次可恢复失败：第三次返回 true（阈值 3）
+        local tThree = mkTask("three", function() error(ex.recoverable("还是卡住")) end)
+        local eThree = mkEntry(tThree)
+        a.eq(sched.runOnce(eThree, now), false, "连续失败第 1 次不停止")
+        a.eq(sched.runOnce(eThree, now), false, "连续失败第 2 次不停止")
+        a.eq(store.three.failureStreak, 2, "连续失败累计到 2")
+        a.eq(sched.runOnce(eThree, now), true, "连续失败达到阈值 3 返回 true（停止脚本）")
+        a.eq(store.three.failureStreak, 3, "停止时 failureStreak 为 3")
+
+        -- 失败之后的一次成功把计数清零
+        local tReset = mkTask("reset", function() error(ex.recoverable("临时故障")) end)
+        local eReset = mkEntry(tReset)
+        sched.runOnce(eReset, now)
+        a.eq(store.reset.failureStreak, 1, "恢复用例先失败一次")
+        tReset.run = function() end
+        a.eq(sched.runOnce(eReset, now), false, "恢复用例改成功后正常返回")
+        a.eq(store.reset.failureStreak, 0, "一次成功把连续失败计数清零")
+    end)
+
+    -- 无论用例怎么结束都必须还原：设备上后续用例还依赖真实实现
+    st.get, st.save, settings.read = realGet, realSave, realRead
+    sched.MAX_FAILURE_STREAK = realMax
+    if not okAll then
+        a.ok(false, "runOnce 用例执行期间抛出异常: " .. tostring(errAll))
+    end
+end
+
 local rule = require("vision.rule")
 local image = require("vision.image")
 
@@ -218,11 +294,20 @@ local function caseRowPool()
     a.eq(rowpool.matchAny(nil, { "btnRow" }), nil, "matchAny 对 nil 返回 nil")
 end
 
-local fishTask = require("tasks.fishing.task")
-local fishAssets = require("tasks.fishing.assets")
-local fishConfig = require("tasks.fishing.config")
-
 local function caseFishing()
+    -- 任务模块延迟加载：require("dev.selfcheck") 本身不再牵连任务代码，
+    -- 任务模块有语法错/缺依赖时入口第 8 行的 require 不会崩。
+    -- 这里加载失败只记一条跳过，精确报错交给入口的 registry.load（在 pcall 内）。
+    local okReq, fishTask, fishAssets, fishConfig = pcall(function()
+        return require("tasks.fishing.task"),
+               require("tasks.fishing.assets"),
+               require("tasks.fishing.config")
+    end)
+    if not okReq then
+        a.skip("钓鱼任务静态检查", "任务模块加载失败: " .. tostring(fishTask))
+        return
+    end
+
     a.eq(fishTask.name, "fishing", "钓鱼任务 name 为 fishing")
     a.eq(fishTask.title, "钓鱼", "钓鱼任务 title 为 钓鱼")
     a.eq(fishTask.ui, "tasks/fishing.ui", "钓鱼任务 ui 指向参数页")
@@ -256,6 +341,7 @@ function _M.run()
     caseTask()
     caseRegistry()
     caseScheduler()
+    caseRunOnce()
     caseRule()
     caseRowPool()
     caseFishing()

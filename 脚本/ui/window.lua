@@ -16,8 +16,12 @@ function _M.show(uifile, w, h, onEvent)
 end
 
 -- 关闭窗口。save 为 true 时 lrjl 会持久化控件值到该窗口绑定的配置文件
+-- 注意：必须把 save 强制成真正的布尔再传给 closeWindow。
+-- 实测 lrjl 回调里的 arg1 未必是 boolean（可能是 1 之类的真值），
+-- 而 `1 == true` 为 false —— 那样窗口会以 save=false 关闭，
+-- 任务参数页的所有修改会被静默丢弃，日志里完全看不出来。
 function _M.close(handle, save)
-    closeWindow(handle, save == true)
+    closeWindow(handle, not not save)
 end
 
 return _M

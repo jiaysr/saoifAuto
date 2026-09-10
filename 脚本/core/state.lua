@@ -5,6 +5,15 @@
 -- 注意：任务设置（启用/优先级/间隔）不在这里，见 core/settings.lua
 local _M = {}
 
+-- 延迟且防御性取 logger：state 在自检等场景下可能被单独加载，
+-- 日志模块缺失/加载失败都不能让 save 本身抛错。
+local function warnSafe(msg)
+    local ok, logger = pcall(require, "core.logger")
+    if ok and logger and type(logger.warn) == "function" then
+        pcall(logger.warn, msg)
+    end
+end
+
 local DIR  = "saoif_state"
 local FILE = "state.json"
 
@@ -35,8 +44,16 @@ end
 function _M.save()
     if not _data then return false end
     local ok, enc = pcall(jsonLib.encode, _data)
-    if not ok then return false end
-    return writeFile(_path, enc) == true
+    if not ok then
+        warnSafe("状态编码失败，本次未落盘: " .. tostring(enc))
+        return false
+    end
+    if writeFile(_path, enc) ~= true then
+        -- 静默失败会让每次重启都重跑所有任务，必须留痕
+        warnSafe("状态写入失败，本次未落盘: " .. tostring(_path))
+        return false
+    end
+    return true
 end
 
 -- 取某任务的记录；不存在则创建空记录（nextRun 为 nil，调用方视为立即到期）

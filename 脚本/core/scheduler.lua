@@ -83,6 +83,9 @@ function _M.runOnce(entry, now)
     local t = entry.task
     logger.info(string.format("========== 开始任务: %s ==========", t.title))
 
+    -- readConfig 抛错/返回非表时 cfg 记为 nil，任务应能用自己的回落
+    -- （如 fishing 的 `cfg = cfg or config.load()`）拿到完整默认值；
+    -- 传 {} 会让那个回落失效，随后在 nil 字段上抛出难懂的错。
     local cfg = {}
     local kind, message
 
@@ -90,7 +93,11 @@ function _M.runOnce(entry, now)
     -- 没有 handle 可用；任务应从已持久化的配置文件读取（见 core/settings.pageOf）。
     if type(t.readConfig) == "function" then
         local okCfg, c = pcall(t.readConfig)
-        if okCfg and type(c) == "table" then cfg = c end
+        if okCfg and type(c) == "table" then
+            cfg = c
+        else
+            cfg = nil          -- 读失败：交回任务自己的回落
+        end
     end
 
     -- ctx.shouldStop 必须真的可用，否则任务里的停止检查永远不会触发
@@ -131,6 +138,9 @@ function _M.runOnce(entry, now)
     if _M.shouldGiveUp(rec.failureStreak) then
         logger.error(string.format("%s 连续失败 %d 次，停止脚本等待人工介入",
             t.title, rec.failureStreak))
+        logger.error(string.format(
+            "恢复方法：在【配置】标签页打开「%s」参数页并禁用它，然后重新运行；任意一次成功会把连续失败计数清零",
+            t.title))
         return true
     end
     return false

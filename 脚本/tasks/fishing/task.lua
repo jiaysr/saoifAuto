@@ -47,117 +47,127 @@ function M.run(cfg, ctx)
 
     setSnapCacheTime(0)
 
-    if cfg.debugColors then
-        logger.info("首帧颜色采样:")
-        rule.dumpPoints(A.DO1.str, "DO1")
-        rule.dumpPoints(A.DO2.str, "DO2")
-        rule.dumpPoints(A.DO3.str, "DO3")
-        rule.dumpPoints(A.DO4.str, "DO4")
-        rule.dumpPoints(A.TARGET.str, "Target")
-    end
+    -- 任务里的全局副作用（快照缓存、HUD）必须在成功与失败两条路径上都还原：
+    -- 调度器会吞掉异常继续跑，错误路径漏还原会让整个会话都跑在
+    -- 「快照缓存关闭 + 覆盖层留在游戏上」的状态里。
+    -- 还原后必须原样重抛，调度器仍靠 ex.kindOf(err) 分类（见设计文档 §6）。
+    local okBody, errBody = pcall(function()
 
-    local endTime    = tickCount() + cfg.loopTime * 1000
-    local cloneSkip  = 0
-    local pullPhase  = false
-    local obsPos, obsTick
-
-    updateHud("待机")
-
-    while tickCount() < endTime do
-        local do1        = rule.appear(A.DO1)
-        local do4        = rule.appear(A.DO4)
-        local do3Matched = rule.appear(A.DO3)
-        local textMatched = rule.appear(A.TARGET)
-
-        if do1 then
-            logger.info("点击开始")
-            tap(cfg.clickX, cfg.clickY)
-            pullPhase = false
-            updateHud("抛竿")
+        if cfg.debugColors then
+            logger.info("首帧颜色采样:")
+            rule.dumpPoints(A.DO1.str, "DO1")
+            rule.dumpPoints(A.DO2.str, "DO2")
+            rule.dumpPoints(A.DO3.str, "DO3")
+            rule.dumpPoints(A.DO4.str, "DO4")
+            rule.dumpPoints(A.TARGET.str, "Target")
         end
 
-        if do4 then
-            logger.info("提竿")
-            tap(cfg.clickX, cfg.clickY)
-            pullPhase = true
-            obsPos, obsTick = nil, nil
-            updateHud("提竿")
-        end
+        local endTime    = tickCount() + cfg.loopTime * 1000
+        local cloneSkip  = 0
+        local pullPhase  = false
+        local obsPos, obsTick
 
-        if pullPhase then
-            local now = tickCount()
-            local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-            if pos then
-                if obsPos and pos ~= obsPos then
-                    logNeedleMove(pos, now, obsPos, obsTick)
-                end
-                obsPos, obsTick = pos, now
-            else
-                -- 浮标离开扫描列，重新等待首次出现
+        updateHud("待机")
+
+        while tickCount() < endTime do
+            local do1        = rule.appear(A.DO1)
+            local do4        = rule.appear(A.DO4)
+            local do3Matched = rule.appear(A.DO3)
+            local textMatched = rule.appear(A.TARGET)
+
+            if do1 then
+                logger.info("点击开始")
+                tap(cfg.clickX, cfg.clickY)
+                pullPhase = false
+                updateHud("抛竿")
+            end
+
+            if do4 then
+                logger.info("提竿")
+                tap(cfg.clickX, cfg.clickY)
+                pullPhase = true
                 obsPos, obsTick = nil, nil
+                updateHud("提竿")
             end
-        end
 
-        if textMatched and not do3Matched then
-            local pStart, pEnd = pixel.findPerfectZone(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-            if pStart then
-                logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
-                updateHud("追踪浮标")
-                local lastPos, lastTick
-                local needleEnd = tickCount() + NEEDLE_TIMEOUT
-                while tickCount() < needleEnd do
-                    local now = tickCount()
-                    local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-                    if pos then
-                        if lastPos and pos ~= lastPos then
-                            logNeedleMove(pos, now, lastPos, lastTick)
-                        end
-                        lastPos, lastTick = pos, now
-                        if pos >= pStart + 5 and pos <= pEnd + 5 then
-                            logger.info(string.format("命中! pos=%d", pos))
-                            tap(cfg.clickX, cfg.clickY)
-                            sleep(1000)
-                            break
-                        end
-                    else
-                        lastPos, lastTick = nil, nil
+            if pullPhase then
+                local now = tickCount()
+                local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+                if pos then
+                    if obsPos and pos ~= obsPos then
+                        logNeedleMove(pos, now, obsPos, obsTick)
                     end
-                    sleep(5)
+                    obsPos, obsTick = pos, now
+                else
+                    -- 浮标离开扫描列，重新等待首次出现
+                    obsPos, obsTick = nil, nil
                 end
             end
-        end
 
-        if not textMatched and do3Matched then
-            cloneSkip = cloneSkip + 1
-            if cloneSkip >= CLONE_CONFIRM_FRAMES then
-                cloneSkip = 0
-                if rule.appearThenClick(A.CLONE) then
-                    successCount = successCount + 1
-                    logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
-                    updateHud("结算")
-                    pullPhase = false
-                    endTime = tickCount() + cfg.loopTime * 1000
-                    sleep(1000)
+            if textMatched and not do3Matched then
+                local pStart, pEnd = pixel.findPerfectZone(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+                if pStart then
+                    logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
+                    updateHud("追踪浮标")
+                    local lastPos, lastTick
+                    local needleEnd = tickCount() + NEEDLE_TIMEOUT
+                    while tickCount() < needleEnd do
+                        local now = tickCount()
+                        local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+                        if pos then
+                            if lastPos and pos ~= lastPos then
+                                logNeedleMove(pos, now, lastPos, lastTick)
+                            end
+                            lastPos, lastTick = pos, now
+                            if pos >= pStart + 5 and pos <= pEnd + 5 then
+                                logger.info(string.format("命中! pos=%d", pos))
+                                tap(cfg.clickX, cfg.clickY)
+                                sleep(1000)
+                                break
+                            end
+                        else
+                            lastPos, lastTick = nil, nil
+                        end
+                        sleep(5)
+                    end
                 end
             end
+
+            if not textMatched and do3Matched then
+                cloneSkip = cloneSkip + 1
+                if cloneSkip >= CLONE_CONFIRM_FRAMES then
+                    cloneSkip = 0
+                    if rule.appearThenClick(A.CLONE) then
+                        successCount = successCount + 1
+                        logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
+                        updateHud("结算")
+                        pullPhase = false
+                        endTime = tickCount() + cfg.loopTime * 1000
+                        sleep(1000)
+                    end
+                end
+            end
+
+            if cfg.maxCatch > 0 and successCount >= cfg.maxCatch then
+                logger.info(string.format("已达目标次数 %d，提前结束", cfg.maxCatch))
+                break
+            end
+
+            if ctx and ctx.shouldStop and ctx.shouldStop() then
+                logger.info("收到停止信号，结束钓鱼")
+                break
+            end
+
+            sleep(30)
         end
 
-        if cfg.maxCatch > 0 and successCount >= cfg.maxCatch then
-            logger.info(string.format("已达目标次数 %d，提前结束", cfg.maxCatch))
-            break
-        end
+    end)
 
-        if ctx and ctx.shouldStop and ctx.shouldStop() then
-            logger.info("收到停止信号，结束钓鱼")
-            break
-        end
-
-        sleep(30)
-    end
-
-    hudView:close()
+    -- 两条路径都还原：成功、以及任何 error（含 ex.recoverable / ex.fatal）
     setSnapCacheTime(100)
+    hudView:close()
     logger.info(string.format("========== 结束，共钓鱼 %d 次 ==========", successCount))
+    if not okBody then error(errBody) end
 end
 
 return M

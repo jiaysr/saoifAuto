@@ -46,7 +46,13 @@ function _M.report(tag)
     local pass, fail, skip = _M.summary()
     print(string.format("[%s] ===== 结果: %d 通过 / %d 失败 / %d 跳过 =====",
         tag, pass, fail, skip))
-    return fail == 0
+    if skip > 0 then
+        print(string.format(
+            "[%s] [W] 跳过 %d 个用例（环境不支持或依赖缺失），本次自检结果不完整",
+            tag, skip))
+    end
+    -- 全跳过（如环境探测失败）时没有验证到任何东西，不能算通过
+    return fail == 0 and pass > 0
 end
 
 return _M

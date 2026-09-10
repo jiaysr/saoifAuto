@@ -5,6 +5,7 @@ local registry  = require("core.registry")
 local scheduler = require("core.scheduler")
 local state     = require("core.state")
 local settings  = require("core.settings")
+local ex        = require("core.exception")
 local selfcheck = require("dev.selfcheck")
 local rowpool   = require("ui.rowpool")
 local uiwin     = require("ui.window")
@@ -23,7 +24,11 @@ end
 -- ===== 装配任务 =====
 local okLoad, tasks = pcall(registry.load, taskPaths)
 if not okLoad then
-    logger.error("任务装载失败: " .. tostring(tasks))
+    -- pcall 捕获的是错误值本身：协议违规是带 message 的异常表，
+    -- 语法错/缺模块是裸字符串。统一用 kindOf 取出人可读的那句，
+    -- 否则 tostring(err) 只会打出 "table: 0x..."，丢了真实原因。
+    local _, message = ex.kindOf(tasks)
+    logger.error("任务装载失败: " .. tostring(message))
     toast("任务装载失败，详见日志")
     return
 end
@@ -145,7 +150,9 @@ scheduler.setup(tasks)
 -- 不读就等于界面上有个什么都不做的控件 —— 会误导用户以为设置了什么。
 local gcfg  = settings.decode(getUIConfig and getUIConfig("saoif.config") or "")
 local gpage = settings.page(gcfg, 2)          -- page2 = 全局标签页（总览0 / 配置1 / 全局2）
-local maxFail = settings.num(gpage.edMaxFail, scheduler.MAX_FAILURE_STREAK)
+-- math.floor：用户可能填 7.5，而下面的日志用 %d 格式化；
+-- Lua ≥5.3 里 string.format("%d", 7.5) 会直接抛错（且发生在主循环之前）。
+local maxFail = math.floor(settings.num(gpage.edMaxFail, scheduler.MAX_FAILURE_STREAK))
 -- 下限保护：shouldGiveUp 是 streak >= MAX，成功后 streak 归 0，
 -- 故 MAX=0 会让判据恒真、脚本在第一次成功后就停。本项目别处的习惯是
 -- 「0 = 不限制」，用户很可能这么填，故必须挡住。
@@ -156,6 +163,16 @@ if maxFail < 1 then
 end
 scheduler.MAX_FAILURE_STREAK = maxFail
 logger.info(string.format("连续失败阈值 = %d", scheduler.MAX_FAILURE_STREAK))
+
+-- 全部任务都禁用时，主循环只会每 30 秒空转一次，没有任何提示 ——
+-- 用户点了【继续】却进入静默爬行，必须明确告警。
+local anyEnabled = false
+for _, t in ipairs(tasks) do
+    if settings.read(t.name, t).enabled then anyEnabled = true; break end
+end
+if not anyEnabled then
+    logger.warn("没有任何启用的任务，脚本将一直空转；请在【配置】标签页启用至少一个任务后重新运行")
+end
 
 while not scheduler.shouldStop() do
     local now = os.time()
