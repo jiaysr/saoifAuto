@@ -1,0 +1,21 @@
+# .gitignore — saoif (lrjl IDE 项目)
+
+# ===== lrjl IDE 本地状态（自动生成 / 每台机器不同，不提交）=====
+
+# IDE 内置的历史快照版本库：脚本运行前自动快照，每运行一次就写一次
+# （.ver/HEAD、.ver/commits/*.json、.ver/objects/… 属本机数据，且会持续变动）
+.ver
+
+# IDE 运行状态目录
+.omo
+
+# CodeGraph 代码索引缓存（索引数据库、守护进程日志、套接字）
+# 注意：本项目里它是指向 ~/.omo/codegraph/… 的符号链接，故不带尾部斜杠
+.codegraph
+
+
+# ===== 以下是刻意保留在 git 中的文件，不要忽略 =====
+
+# cache/                —— lrjl 规范中属「自动生成」目录，但 cache/pub/自定义库.lua
+#                          是本项目手写的公共库文件，需随项目提交
+# obf_selection.json    —— IDE 写出的混淆文件选择状态，作为打包配置保留

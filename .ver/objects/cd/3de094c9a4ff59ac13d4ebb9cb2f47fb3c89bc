@@ -1,9 +1,0 @@
--- 临时入口：查看屏幕信息
-print("displaySize=" .. tostring(getDisplaySize()))
-print("displayDpi=" .. tostring(getDisplayDpi()))
-print("displayRotate=" .. tostring(getDisplayRotate()))
-local info = getDisplayInfo()
-print("displayInfo=" .. tostring(info))
-for k, v in pairs(info or {}) do
-    print("  " .. tostring(k) .. " = " .. tostring(v))
-end
