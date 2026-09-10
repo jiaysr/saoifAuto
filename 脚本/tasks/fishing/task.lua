@@ -24,6 +24,14 @@ function M.readConfig()
     return config.load()
 end
 
+-- 打印浮标位置变化与速度（px/s）
+local function logNeedleMove(pos, now, lastPos, lastTick)
+    local dt = now - lastTick
+    local v = dt > 0 and math.abs(pos - lastPos) * 1000 / dt or 0
+    logger.info(string.format("浮标 y=%3d (%+d) 间隔=%2dms 速度=%6.0f px/s",
+        pos, pos - lastPos, dt, v))
+end
+
 function M.run(cfg, ctx)
     cfg = cfg or config.load()
     local successCount = 0
@@ -34,12 +42,17 @@ function M.run(cfg, ctx)
     end
 
     logger.info("=== 开始钓鱼 ===")
+    logger.info(string.format("参数: 单轮超时=%ds 目标次数=%d 按钮=(%d,%d) 扫描列X=%d 区域Y=%d~%d",
+        cfg.loopTime, cfg.maxCatch, cfg.clickX, cfg.clickY, cfg.scanX, cfg.zoneY1, cfg.zoneY2))
 
     setSnapCacheTime(0)
 
     if cfg.debugColors then
         logger.info("首帧颜色采样:")
         rule.dumpPoints(A.DO1.str, "DO1")
+        rule.dumpPoints(A.DO2.str, "DO2")
+        rule.dumpPoints(A.DO3.str, "DO3")
+        rule.dumpPoints(A.DO4.str, "DO4")
         rule.dumpPoints(A.TARGET.str, "Target")
     end
 
@@ -75,15 +88,12 @@ function M.run(cfg, ctx)
             local now = tickCount()
             local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
             if pos then
-                if obsPos and pos ~= obsPos and obsTick then
-                    local dt = now - obsTick
-                    if dt > 0 then
-                        logger.info(string.format("浮标 y=%3d (%+d) 间隔=%2dms 速度=%6.0f px/s",
-                            pos, pos - obsPos, dt, math.abs(pos - obsPos) * 1000 / dt))
-                    end
+                if obsPos and pos ~= obsPos then
+                    logNeedleMove(pos, now, obsPos, obsTick)
                 end
                 obsPos, obsTick = pos, now
             else
+                -- 浮标离开扫描列，重新等待首次出现
                 obsPos, obsTick = nil, nil
             end
         end
@@ -93,14 +103,24 @@ function M.run(cfg, ctx)
             if pStart then
                 logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
                 updateHud("追踪浮标")
+                local lastPos, lastTick
                 local needleEnd = tickCount() + NEEDLE_TIMEOUT
                 while tickCount() < needleEnd do
+                    local now = tickCount()
                     local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-                    if pos and pos >= pStart + 5 and pos <= pEnd + 5 then
-                        logger.info(string.format("命中! pos=%d", pos))
-                        tap(cfg.clickX, cfg.clickY)
-                        sleep(1000)
-                        break
+                    if pos then
+                        if lastPos and pos ~= lastPos then
+                            logNeedleMove(pos, now, lastPos, lastTick)
+                        end
+                        lastPos, lastTick = pos, now
+                        if pos >= pStart + 5 and pos <= pEnd + 5 then
+                            logger.info(string.format("命中! pos=%d", pos))
+                            tap(cfg.clickX, cfg.clickY)
+                            sleep(1000)
+                            break
+                        end
+                    else
+                        lastPos, lastTick = nil, nil
                     end
                     sleep(5)
                 end
