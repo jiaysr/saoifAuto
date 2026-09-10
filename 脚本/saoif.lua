@@ -1,5 +1,4 @@
 -- 脚本/saoif.lua
--- ⚠ spike/framework-skeleton 分支临时入口：只运行探针 4。
--- 原实现完好保存在 main 分支，验证完用 git checkout main -- 脚本/saoif.lua 还原。
-
-require("spike.probe4").run()
+-- ⚠ 开发期临时入口：只跑自检。Task 8 会替换为正式入口。
+-- 原实现见 main 分支。
+require("dev.selfcheck").run()
