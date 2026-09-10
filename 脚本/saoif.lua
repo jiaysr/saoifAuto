@@ -116,7 +116,9 @@ while true do
         local t = action.task
         logger.info("打开任务配置页: " .. t.title)
         -- 任务参数页自己处理关闭；这里只负责开与关
-        local function onTaskEvent(handle, event)
+        -- arg1 必须收下：它就是窗口的保存标志，漏掉会解析成全局 nil，
+        -- 导致任务配置页永远以 save=false 关闭，用户改的参数被静默丢弃。
+        local function onTaskEvent(handle, event, arg1)
             if event == "onload" then
                 local rec = state.get(t.name)
                 local when = rec.nextRun and os.date("%Y-%m-%d %H:%M:%S", rec.nextRun) or "待定"
@@ -139,9 +141,18 @@ scheduler.setup(tasks)
 
 -- 读全局设置：连续失败阈值（全局标签页的 edMaxFail）。
 -- 不读就等于界面上有个什么都不做的控件 —— 会误导用户以为设置了什么。
+-- 下限保护：0/负数会让 shouldGiveUp 在第一次成功后立刻成立（0 >= 0），
+-- 而本项目其他地方「0」的习惯含义是「不限制」，很容易被误填。
 local gcfg  = settings.decode(getUIConfig and getUIConfig("saoif.config") or "")
 local gpage = settings.page(gcfg, 2)          -- page2 = 全局标签页（总览0 / 配置1 / 全局2）
-scheduler.MAX_FAILURE_STREAK = settings.num(gpage.edMaxFail, scheduler.MAX_FAILURE_STREAK)
+local maxFail = settings.num(gpage.edMaxFail, scheduler.MAX_FAILURE_STREAK)
+if maxFail < 1 then
+    logger.warn(string.format("全局设置的最大连续失败次数为 %d，无效，回落默认 %d",
+        maxFail, scheduler.MAX_FAILURE_STREAK))
+    maxFail = scheduler.MAX_FAILURE_STREAK
+end
+-- 字段名核对过：core/scheduler.lua:11 定义、:78 读取，是 MAX_FAILURE_STREAK
+scheduler.MAX_FAILURE_STREAK = maxFail
 logger.info(string.format("连续失败阈值 = %d", scheduler.MAX_FAILURE_STREAK))
 
 while not scheduler.shouldStop() do
