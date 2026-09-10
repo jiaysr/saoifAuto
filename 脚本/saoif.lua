@@ -119,7 +119,7 @@ while true do
         -- ⚠ 参数必须带 arg1！onclose 的 arg1 是「点了继续(true) 还是退出(false)」，
         --   少了它 arg1 会解析成全局 nil，窗口以 save=false 关闭 ——
         --   任务参数页的所有修改（启用/优先级/间隔/功能参数）会被静默丢弃，
-        --   而且日志里完全看不出来。设备验证过的写法见 脚本/spike/probe4.lua:132-135。
+        --   而且日志里完全看不出来。设备验证过的写法就是下面这样透传 arg1。
         local function onTaskEvent(handle, event, arg1)
             if event == "onload" then
                 local rec = state.get(t.name)

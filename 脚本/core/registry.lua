@@ -1,5 +1,5 @@
 -- 脚本/core/registry.lua
--- 任务注册表：require 清单里的模块并建立 name -> 任务 的查找（取代 core/dispatcher.lua）
+-- 任务注册表：require 清单里的模块并建立 name -> 任务 的查找
 local taskModule = require("core.task")
 
 local _M = {}
