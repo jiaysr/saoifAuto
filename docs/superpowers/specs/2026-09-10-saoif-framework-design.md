@@ -80,7 +80,7 @@
 业务层   脚本/tasks/<任务>/         每个游戏功能一个目录
 ```
 
-依赖方向单向向下：`tasks` 依赖 `core`/`vision`/`game`，反向不依赖。`core` 不依赖 `tasks`（任务清单由入口注入）。
+依赖方向单向向下：`tasks` 依赖 `core`/`vision`/`ui`/`game`，反向不依赖。`core` 不依赖 `tasks`（任务清单由入口注入）。
 
 ## 5. 目录结构
 
@@ -149,7 +149,7 @@ return {
     limitTime  = 0,   -- 单轮软超时（秒），0 = 不限
     limitCount = 0,   -- 单轮目标次数，0 = 不限
 
-    readConfig = function(handle) ... end,  -- 从参数页读配置，返回 table
+    readConfig = function() ... end,    -- 从已持久化的配置文件读参数，返回 table（不带 handle）
     run        = function(cfg, ctx) ... end, -- 任务主逻辑
 }
 ```
@@ -163,6 +163,8 @@ return {
 **`ctx` 提供**：`shouldStop()`（读调度器停止标志）、`taskName`。**只有这两项** —— `ui.hud` 已经把 HUD 句柄生命周期包成一行，再往 `ctx` 里塞一层是多余的；本轮统计本来就是任务自己的局部变量。
 
 **`readConfig` 不带参数**：调度器执行任务时配置窗口早已关闭，没有 handle 可用。任务从**已持久化的配置文件**读取（`core/settings.pageOf(taskName, page)`），参数页只负责写入。
+
+**任务内全局副作用的还原**：任务里若改动了设备全局状态（如 `setSnapCacheTime`）或建了覆盖层（HUD），必须在 `run` 内用 `pcall` 把主体包起来，在成功与失败两条路径上都还原，然后**原样重抛**错误（`if not ok then error(err) end`）。调度器会吞掉异常继续跑下一个任务，漏还原会让整个会话都停在错误的状态里；重抛是为了让调度器的 `ex.kindOf(err)` 仍能正确分类。参见 `tasks/fishing/task.lua` 的写法。
 
 **每个任务的参数页 UI 约定**（因设置存在这里，§8）——除功能自己的参数外，必须包含这组调度控件：
 
@@ -201,7 +203,7 @@ end
 | 正常返回 | `now + successInterval` | `failureStreak = 0`，`successCount += 1` |
 | `ex.recoverable` | `now + failureInterval` | `failureStreak += 1`，记 WARN 日志 |
 | `ex.fatal` / 未预期异常 | 不重排 | 记 ERROR 日志，**停止整个脚本** |
-| 连续失败 ≥ 3 次 | 不重排 | 记 ERROR 日志，停止脚本（需人工介入） |
+| 连续失败 ≥ 3 次 | `now + failureInterval`（沿用最后一次可恢复失败的结算） | 记 ERROR 日志，停止脚本（需人工介入） |
 
 **空转策略**：没有到期任务时，`sleep` 到最近一个到期时间与 30 秒中的较小值，避免高频空转。
 
@@ -212,7 +214,7 @@ end
 | 数据 | 存哪 | 怎么读 | 怎么写 |
 |---|---|---|---|
 | **任务设置**：启用、优先级、成功/失败间隔，以及该任务的功能参数 | `tasks_<名>.config`（该任务参数页绑的配置文件） | `getUIConfig("tasks_<名>.config")` | lrjl 在窗口关闭时自动保存 |
-| **全局设置**：显示 HUD、最大连续失败次数、日志级别 | `saoif.config`（主界面绑的配置文件） | `getUIConfig("saoif.config")` | 同上 |
+| **全局设置**：最大连续失败次数 | `saoif.config`（主界面绑的配置文件） | `getUIConfig("saoif.config")` | 同上 |
 | **运行时状态**：`nextRun`、`successCount`、`failureStreak`、`lastResult` | `getWorkPath()/saoif_state/state.json` | `readFile` + `jsonLib.decode` | 调度器每轮结算后 `jsonLib.encode` + `writeFile` |
 
 **`getUIConfig` 的返回格式**（实测）：
@@ -267,7 +269,7 @@ local enabled = (cfg.page0.chkEnable == "true")   -- 值全是字符串，必须
    点击某行 → 同上
 
 【全局】静态控件，无列表
-   显示 HUD / 最大连续失败次数 / 日志级别 / 日志写文件
+   最大连续失败次数（edMaxFail）
    按钮 btnSelfCheck → 跑纯逻辑自检，结果 toast + 日志
 
 底部：【继续】进入调度主循环　【退出】结束脚本
