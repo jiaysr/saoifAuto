@@ -3,6 +3,7 @@
 - 日期：2026-09-10
 - 状态：已确认，待实施
 - 分支：`spike/framework-skeleton`（验证）→ 后续实施分支
+- 说明：§3 的全部平台结论、§8 的设置存储、§10 的界面方案均为真机实测后的修订版
 
 ## 1. 背景与目标
 
@@ -29,27 +30,46 @@
 |---|---|---|
 | 运行模型 | **到期时间调度器** | 每个任务有 `nextRun`，主循环挑最早到期的启用任务执行。参考项目同款 |
 | 配置界面 | **每个任务一个静态 `.ui`** | 保留 XML 界面的精细样式 |
-| 状态持久化 | **需要** | `nextRun` 等运行时状态落盘，脚本重启后延续 |
+| 主界面 | **三标签页：总览 / 配置 / 全局** | 总览列出启用任务并按运行时间排序，配置列出全部任务，点击进入该任务参数页 |
+| 状态持久化 | **需要，但分两类** | 任务设置靠 lrjl 配置文件，运行时状态（`nextRun`）落 `state.json` |
 | 错误恢复 | **分类处理** | 可恢复错误重排本任务，需人工介入的错误停止脚本 |
 | 平台 | 懒人精灵（lrjl）Lua，Android | 分辨率基准 1280x720 横屏 |
 
-## 3. 平台行为验证结论（spike 实测）
+## 3. 平台行为验证结论（真机实测）
 
-2026-09-10 在真机上通过 `脚本/spike/probe.lua` 实测，以下结论是设计的前提：
+2026-09-10 在真机上通过 `脚本/spike/probe*.lua` 实测。**以下结论是设计的前提**，每条都有实测证据。
+
+### 3.1 存储与配置
 
 | 结论 | 实测证据 |
 |---|---|
 | `getWorkPath()` 可写 | 返回 `/data/local/tmp/lrwork/com.nx.nxprojit/script/work`；`writeFile`/`readFile`/`fileExist`/`mkdir` 均可用 |
 | `jsonLib.encode`/`decode` 可用 | 状态表编码后写盘、读回、解码，字段值还原正确 |
 | **`<窗口 配置文件="x.config">` 自动持久化所有控件值** | 4 类控件全部验证：输入框 `空→标记`、数字框 `45→88`、多选框 `true→false`、下拉框 `0→2` |
-| `showUI` 阻塞并在关闭时返回配置 JSON | `showUI` 返回值为各页各控件值的 JSON 字符串 |
+| **`getUIConfig(name)` 能在不开窗口时读回配置** | 返回 **JSON 字符串**（不是 table），结构 `{"page0":{"控件id":"值"}}`，**所有值都是字符串** |
+
+### 3.2 窗口与交互
+
+| 结论 | 实测证据 |
+|---|---|
+| `showUI` 阻塞并在关闭时返回配置 JSON | 返回值为各页各控件值的 JSON 字符串 |
 | 事件回调可用闭包 upvalue 传用户意图 | 回调中 `action = "config"`，`showUI` 返回后读到该值 |
 | **`onload` 内调 `closeWindow` 关不掉窗口** | 日志显示 `showUI` 已返回且脚本继续，但窗口仍盖在屏幕上 |
+| `setUIText` 可以改**按钮**的文字 | 行池按钮的文字运行时被成功替换 |
+| `setUIVisible(id, 8)` 隐藏行且不留空档 | 8 个行池只用 5 个，剩余 3 个收起后布局无空洞 |
+| `onclick` 的 `arg2` 就是被点控件的 `id` | 由 `id` 前缀 + 序号反查行号与任务，4 次点击全部正确 |
+
+### 3.3 静态 UI 的控件限制
+
+静态 XML **没有表格/列表控件**，支持的只有：文本框、输入框、按钮、多选框、单选框、下拉框、浏览器。
+且**无法在运行时增删控件**。
 
 **关键推论**：
-1. 每个任务的参数页只需绑一个自己的 `配置文件`，**不需要手写配置读写**。
+
+1. 每个任务的参数页只需绑一个自己的 `配置文件`，**不需要手写配置读写**；`getUIConfig` 让调度器不开窗口也能读到它。
 2. 界面流转必须由**用户点击**驱动，不能用 `onload` 自动关窗来跳过步骤。
 3. 「主界面 → 任务参数页 → 返回主界面」用**关一个再开一个的循环**实现，不能嵌套开子窗口。
+4. 动态列表只能用**固定行池**实现（§10）——XML 预放 N 个行按钮，运行时填文字、把多余行隐藏。
 
 ## 4. 架构分层
 
@@ -73,7 +93,7 @@
     task.lua                 任务协议校验与默认值填充
     scheduler.lua            到期调度：挑最早到期任务、跑完重算 nextRun
     state.lua                运行时状态持久化（getWorkPath()/saoif_state/state.json）
-    settings.lua             每任务调度设置（启用/优先级/间隔）的读写
+    settings.lua             读各任务参数页的配置：getUIConfig + 类型转换 + 补默认值
     exception.lua            错误分类 → 处理策略
   vision/
     pixel.lua                比色（从 core/ 移入）
@@ -82,6 +102,7 @@
     ocr.lua                  【占位】OCR 封装
   ui/
     window.lua               showUI 阻塞封装 + 事件路由（upvalue 传 action）
+    rowpool.lua              固定行池：填充/隐藏/点击反查（§10）
     hud.lua                  HUD 封装（从 fishing.lua 抽出）
   game/
     page.lua                 【占位】页面图 + BFS 寻路
@@ -101,7 +122,7 @@
     activity/                【占位】活动
 
 界面/
-  saoif.ui                   主界面：任务下拉框 + 调度面板 + 配置/自检/运行
+  saoif.ui                   主界面：总览 / 配置 / 全局 三个标签页（行池列表）
   tasks/
     fishing.ui               钓鱼参数页（从 saoif.ui 迁出）
     daily.ui                 【占位】
@@ -118,10 +139,10 @@
 ```lua
 -- 脚本/tasks/fishing/task.lua
 return {
-    name     = "fishing",              -- 唯一键：state.json 的键、清单引用名
+    name     = "fishing",              -- 唯一键：配置文件名、state.json 的键、清单引用名
     title    = "钓鱼",                  -- 界面显示名
     ui       = "tasks/fishing.ui",     -- 参数页（相对 界面/）
-    enabled  = true,                   -- 默认启用
+    enabled  = true,                   -- 默认启用（用户在参数页可改）
     priority = 5,                      -- 越小越优先（仅当到期时间相同时决胜）
     interval = { success = 1, failure = 1 },  -- 单位：小时
 
@@ -141,13 +162,23 @@ return {
 
 **`ctx` 提供**：`shouldStop()`、`hud`、`stats`（本轮计数）、`taskName`。
 
+**每个任务的参数页 UI 约定**（因设置存在这里，§8）——除功能自己的参数外，必须包含这组调度控件：
+
+| 控件 id | 类型 | 含义 |
+|---|---|---|
+| `chkEnable` | 多选框 | 是否启用 |
+| `edPriority` | 输入框(数字) | 优先级，越小越先跑 |
+| `edSuccessInterval` | 输入框(数字) | 成功后的间隔（小时） |
+| `edFailureInterval` | 输入框(数字) | 失败后的间隔（小时） |
+| `lblNextRun` | 文本框（只读） | 下次运行时间，运行时刷新 |
+
 ## 7. 调度器
 
 `core/scheduler.lua` 主循环：
 
 ```lua
 local scheduler = require("core.scheduler")
-scheduler.setup(tasks)                 -- 注入清单（来自 tasks/index.lua）
+scheduler.setup(tasks, settings)       -- 注入清单（tasks/index.lua）与设置读取器
 
 while not scheduler.shouldStop() do
     local task = scheduler.nextDue(os.time())
@@ -159,7 +190,7 @@ while not scheduler.shouldStop() do
 end
 ```
 
-**到期挑选**：遍历启用任务，取 `nextRun <= now` 中 `nextRun` 最小者；`nextRun` 相同则 `priority` 小者胜。
+**到期挑选**：遍历启用任务（启用状态来自 §8 的 `settings`），取 `nextRun <= now` 中 `nextRun` 最小者；`nextRun` 相同则 `priority` 小者胜。
 
 **跑完结算**（`onFinish`）：
 
@@ -174,70 +205,112 @@ end
 
 ## 8. 状态与设置
 
-两个存储，职责不同：
+两类数据分开存。**任务设置不进 `state.json`** —— 它跟着任务自己的参数页走。
 
-| 存储 | 位置 | 内容 | 谁写 |
+| 数据 | 存哪 | 怎么读 | 怎么写 |
 |---|---|---|---|
-| `state.json` | `getWorkPath()/saoif_state/state.json` | `nextRun`、`lastResult`、`successCount`、`failureStreak` | 调度器 |
-| `saoif_main.config` | lrjl 自动管理 | 主界面控件值（上次选中的任务、全局选项） | lrjl 自动 |
-| `tasks_<名>.config` | lrjl 自动管理 | 该任务参数页的所有控件值 | lrjl 自动 |
+| **任务设置**：启用、优先级、成功/失败间隔，以及该任务的功能参数 | `tasks_<名>.config`（该任务参数页绑的配置文件） | `getUIConfig("tasks_<名>.config")` | lrjl 在窗口关闭时自动保存 |
+| **全局设置**：显示 HUD、最大连续失败次数、日志级别 | `saoif.config`（主界面绑的配置文件） | `getUIConfig("saoif.config")` | 同上 |
+| **运行时状态**：`nextRun`、`successCount`、`failureStreak`、`lastResult` | `getWorkPath()/saoif_state/state.json` | `readFile` + `jsonLib.decode` | 调度器每轮结算后 `jsonLib.encode` + `writeFile` |
 
-**为什么每任务的调度设置（启用/优先级/间隔）不放在界面配置里**：主界面是静态 XML，只有**一组**调度控件（下拉框选中的那个任务显示在这组控件上）。保存时把面板值写回 `state.json` 中该任务的记录。这样 N 个任务共用一组静态控件，无需为每个任务硬编码一行。
+**`getUIConfig` 的返回格式**（实测）：
 
-`state.json` 结构：
+```lua
+local raw = getUIConfig("tasks_fishing.config")
+-- raw 是 JSON 字符串，不是 table；按标签页索引分组：
+-- {"page0":{"chkEnable":"true","edPriority":"5","edSuccessInterval":"1"}}
+local cfg = jsonLib.decode(raw)
+local enabled = (cfg.page0.chkEnable == "true")   -- 值全是字符串，必须自己转类型
+```
+
+**为什么这样分**：每个任务的调度设置就放在它自己的参数页上，用户在一个地方配完；lrjl 负责持久化，`getUIConfig` 让调度器不开窗口也能读到。`core/settings.lua` 封装「读某任务的 `.config` → `jsonLib.decode` → 类型转换 → 补默认值」这套样板，调度器只调它，不碰文件名与字符串转换。
+
+`state.json` 只放**会随运行变化**的东西：
 
 ```json
 {
   "tasks": {
     "fishing": {
-      "enable": true, "priority": 5,
-      "successInterval": 3600, "failureInterval": 3600,
-      "nextRun": 1789033211, "successCount": 12, "failureStreak": 0,
-      "lastResult": "success"
+      "nextRun": 1789033211, "successCount": 12,
+      "failureStreak": 0, "lastResult": "success"
     }
   }
 }
 ```
 
-**首次运行**：`nextRun` 缺失视为「立即到期」。`getWorkPath()` 是设备路径、不进 git，换设备或重装后状态重置，行为是「所有任务各跑一次」，可接受。
+**首次运行**：`nextRun` 缺失视为「立即到期」（所有任务各跑一次）。`getWorkPath()` 是设备路径、不进 git，换设备或重装后运行时状态会重置；任务设置由 lrjl 的配置文件管理，与运行时状态互不影响。
 
-**落盘时机**：每次任务结算后立即 `state.save()`（写整个文件，简单可靠）。用户在主界面改设置时也立即保存。
-
-**模块分工**：`core/state.lua` 只管 `state.json` 的读写；`core/settings.lua` 在其之上提供「按任务名读写调度设置」的语义化接口（`get(name)` 补默认值、`update(name, patch)`），供主界面保存时调用。调度器只依赖 `settings`，不直接碰文件路径。
+**落盘时机**：每次任务结算后立即 `state.save()`（写整个文件，简单可靠）。
 
 ## 9. 配置
 
-- **任务参数**：`界面/tasks/<名>.ui` 绑 `配置文件="tasks_<名>.config"`，lrjl 自动保存/回填。`config.lua` 负责把这些控件值读成一个 table，**默认值只在这里写一份**，XML 的 `默认值` 属性仅作为首次运行的初值。
-- **不要**依赖界面配置保存运行状态文字（`setUIText` 写的标签会被一起保存），这类文字一律在 `onload` 里重新赋值。
+- **任务参数**：`界面/tasks/<名>.ui` 绑 `配置文件="tasks_<名>.config"`，lrjl 自动保存/回填。`config.lua` 负责把控件值读成 table，**默认值只在这里写一份**，XML 的 `默认值` 属性仅作为首次运行的初值。
+- **类型转换**：`getUIConfig` 读回来的值**全是字符串**，`"false"` 不是 `false`、`"0"` 不是 `0`。转换集中在 `core/settings.lua`，不要散落在任务代码里。
+- **不要**依赖界面配置保存运行状态文字：实测运行时用 `setUIText` 写的文字会被一并存进配置文件。这类文字（如列表行、下次运行时间）一律在 `onload` 里重新赋值。
 
 ## 10. 界面流程
 
+主窗口 `界面/saoif.ui`，三个标签页，绑 `配置文件="saoif.config"`：
+
 ```
-主界面 (界面/saoif.ui)
-  ├─ 下拉框 selTask        选任务（静态列出全部任务）
-  ├─ 启用 chkEnable        当前选中任务的调度设置
-  ├─ 优先级 edPriority
-  ├─ 成功间隔 edSuccessInterval / 失败间隔 edFailureInterval
-  ├─ 下次运行 lblNextRun   只读，运行时 setUIText 刷新
-  ├─ 按钮 btnConfig   → 关主界面 → 开该任务参数页 → 关掉后回主界面
-  ├─ 按钮 btnSelfCheck → 跑纯逻辑自检，结果 toast + 日志
-  └─ 继续 / 退出      → 开始调度循环 / 结束脚本
+【总览】启用的任务，按 nextRun 升序
+   行池 btnRow0 .. btnRowN（静态 XML 预放，运行时填充）
+   每行文字：`任务名　下次 HH:MM:SS`
+   点击某行 → 记下该行对应的任务 → 关主窗口 → 打开该任务参数页
+   全部禁用时显示 lblOvEmpty
+
+【配置】全部任务（含禁用）
+   行池 btnAll0 .. btnAllN
+   每行文字：`任务名　下次 …` 或 `任务名　（已禁用）`
+   点击某行 → 同上
+
+【全局】静态控件，无列表
+   显示 HUD / 最大连续失败次数 / 日志级别 / 日志写文件
+   按钮 btnSelfCheck → 跑纯逻辑自检，结果 toast + 日志
+
+底部：【继续】进入调度主循环　【退出】结束脚本
 ```
 
-用「关一个再开一个」的 `while` 循环实现跳转，意图通过闭包 upvalue 回传：
+**行池技术**（静态 XML 无法运行时增删控件，故用固定行池）：
+
+```lua
+-- XML 里预放 ROWS 个按钮；运行时按排序结果填充，多余的隐藏
+for i = 0, ROWS - 1 do
+    local id = prefix .. i           -- btnRow0, btnRow1, ...
+    local t = list[i + 1]
+    if t then
+        rowMap[i] = t
+        setUIText(handle, page, id, t.title .. "　下次 " .. os.date("%H:%M:%S", t.nextRun))
+        setUIVisible(handle, page, id, 0)      -- 0 = 显示
+    else
+        rowMap[i] = nil
+        setUIText(handle, page, id, "")
+        setUIVisible(handle, page, id, 8)      -- 8 = 隐藏且不占位
+    end
+end
+
+-- 点击时从控件 id 反查行号，再反查任务
+local idx = tonumber(string.match(tostring(arg2), "^btnRow(%d+)$"))
+local task = rowMap[idx]
+```
+
+**跳转**：用「关一个再开一个」的循环，意图通过闭包 upvalue 回传（§3 推论 3）。
 
 ```lua
 local action
 local function onEvent(handle, event, arg1, arg2)
-    if event == "onclick" and arg2 == "btnConfig" then
-        action = "config"; closeWindow(handle, true)
+    if event == "onload" then
+        fillRows(handle)                 -- 每次打开都重填，不依赖存下来的旧文字
+    elseif event == "onclick" then
+        local t = rowMap[rowIndexOf(arg2)]
+        if t then action = { kind = "open", task = t }; closeWindow(handle, true) end
     elseif event == "onclose" then
-        action = arg1 and (action or "run") or "quit"
+        action = action or { kind = arg1 and "run" or "quit" }
         closeWindow(handle, arg1)
     end
 end
-showUI("saoif.ui", 640, 860, onEvent)
--- showUI 返回后按 action 决定：开参数页 / 进主循环 / 退出
+showUI("saoif.ui", 640, 900, onEvent)
+-- 返回后：open → 打开该任务参数页，关掉后回到主窗口；run → 进主循环；quit → 结束
 ```
 
 **硬约束**：不在 `onload` 里 `closeWindow`（实测关不掉，会叠窗）。
@@ -292,20 +365,22 @@ error(ex.fatal("配置缺失"))           -- 停止脚本
 
 | 层次 | 手段 | 是否需要游戏在跑 |
 |---|---|---|
-| 纯逻辑 | `脚本/dev/selfcheck.lua`：调度器排序/结算、state 读写往返、配置解析 | 否 |
+| 纯逻辑 | `脚本/dev/selfcheck.lua`：调度器排序/结算、state 读写往返、settings 类型转换 | 否 |
 | 单任务 | `脚本/tasks/<名>/test.lua`：在游戏内验证该任务的特征与流程 | 是 |
-| 界面 | 主界面【自检】按钮触发 selfcheck，结果 toast + 日志 | 否 |
+| 界面 | 主界面【全局】页的【自检】按钮触发 selfcheck，结果 toast + 日志 | 否 |
 | 端到端 | 真机跑 `脚本/saoif.lua`，看 IDE 日志与截图 | 是 |
 
 自检必须能在**不启动游戏**的情况下跑完，这是回归的第一道防线。
 
 ## 14. 迁移路径
 
-1. 搭骨架：建目录、`core/` 六个模块、`vision/rule.lua`、占位 README。
-2. 迁移钓鱼：`fishing.lua` 拆成 `tasks/fishing/{task,assets,config}.lua`；比色串进 `assets.lua`；参数页从 `saoif.ui` 迁到 `界面/tasks/fishing.ui`。
-3. 主界面改造：`界面/saoif.ui` 改成「下拉框 + 调度面板」。
+1. 搭骨架：建目录、`core/` 七个模块、`vision/rule.lua`、`ui/rowpool.lua`、占位 README。
+2. 迁移钓鱼：`fishing.lua` 拆成 `tasks/fishing/{task,assets,config}.lua`；比色串进 `assets.lua`；参数页从 `saoif.ui` 的「钓鱼设置」标签页迁到 `界面/tasks/fishing.ui`，并补上 §6 要求的调度控件。
+3. 主界面改造：`界面/saoif.ui` 改成「总览 / 配置 / 全局」三标签页 + 行池列表。
 4. 回归：钓鱼功能与迁移前行为一致（对比日志中的成功次数与提竿时序）。
 5. 清理：`spike/` 目录与临时入口删除，`saoif.lua` 恢复为正式入口。
+
+**注意**：现有钓鱼参数存在 `saoif.config` 的 `page1`，迁移后改读 `tasks_fishing.config`，用户原有的参数值会回到默认。可在迁移时读一次 `saoif.config` 做一次性导入，或接受重置。
 
 ## 15. 参考项目移植取舍
 
@@ -330,5 +405,7 @@ error(ex.fatal("配置缺失"))           -- 停止脚本
 ## 16. 未决问题
 
 1. **停止信号**：`setStopCallBack` 的回调触发时机与主循环 `ctx.shouldStop()` 的关系尚未实测（spike 未覆盖）。实施第一步先验证：注册回调后设标志位，在主循环里读。若该回调在任务 `run` 期间不触发，则改用其他停止检测方式（届时查 API 文档确认可用函数）。
-2. **休眠期策略**：长时间无到期任务时是否关闭游戏省电（参考项目有 `close_game`/`goto_main`/`stay_there` 三档）。本期**不做**，先固定 `stay_there`。
-3. **`game/page.lua` 的页面图**：本期只留占位，等公告板/每日任务真正开写时再设计——现在设计会是猜测。
+2. **行池上限**：固定行池意味着任务数超过 N 时，多出的任务在总览/配置页**显示不全**；且窗口高度必须按 N 定，任务少时底部留白。需确定 N（建议 12）与是否加「翻页」。**待定**。
+3. **返回后落在哪个标签页**：实测未找到「程序化设置当前标签页」的 API。从任务参数页返回主窗口时，很可能总是落回第一个标签页（总览），而不是用户原来所在的标签页。若体验不可接受，需另找 API 或调整布局。**待定**。
+4. **休眠期策略**：长时间无到期任务时是否关闭游戏省电（参考项目有 `close_game`/`goto_main`/`stay_there` 三档）。本期**不做**，先固定 `stay_there`。
+5. **`game/page.lua` 的页面图**：本期只留占位，等公告板/每日任务真正开写时再设计——现在设计会是猜测。
