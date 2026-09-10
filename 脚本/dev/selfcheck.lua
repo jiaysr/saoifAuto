@@ -65,7 +65,7 @@ local function caseSettings()
     end
     -- 从未打开过参数页的任务应回落默认值
     local cfg = settings.read("__never_opened__", { enabled = true, priority = 5,
-                                                    successInterval = 2, failureInterval = 3 })
+                                                    interval = { success = 2, failure = 3 } })
     a.eq(cfg.enabled, true, "无配置时 enabled 回落默认")
     a.eq(cfg.priority, 5, "无配置时 priority 回落默认")
     a.eq(cfg.successInterval, 2, "无配置时 successInterval 回落默认")

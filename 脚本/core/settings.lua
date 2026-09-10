@@ -42,13 +42,12 @@ function _M.read(taskName, defaults)
 
     local p = _M.pageOf(taskName, 0)
 
-    -- 默认间隔支持两种写法：扁平的 successInterval，或 defaults.interval.success
     local iv = defaults.interval or {}
     return {
         enabled         = _M.bool(p.chkEnable, defaults.enabled ~= false),
         priority        = _M.num(p.edPriority, defaults.priority or 5),
-        successInterval = _M.num(p.edSuccessInterval, defaults.successInterval or iv.success or 1),
-        failureInterval = _M.num(p.edFailureInterval, defaults.failureInterval or iv.failure or 1),
+        successInterval = _M.num(p.edSuccessInterval, iv.success or 1),
+        failureInterval = _M.num(p.edFailureInterval, iv.failure or 1),
     }
 end
 
