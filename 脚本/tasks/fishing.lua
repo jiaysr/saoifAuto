@@ -2,6 +2,10 @@
 -- 自动钓鱼功能
 -- 移植自 D:\project\AutoScript\SaoifAutoScript\tasks\Fishing\script_task.py
 -- 设备分辨率 720x1280，横屏显示（rotate=1），脚本坐标基于横屏 1280x720
+--
+-- 性能说明：追踪阶段不轮询浮标位置，而是用 isDisplayDead 在原生层等待
+--           完美区域像素变化（浮标进入即变色），Lua 侧几乎零开销；
+--           状态判定把同一区域的 DO1/DO3/DO4 合并为一次取色。
 
 local logger = require("core.logger")
 local pixel = require("core.pixel")
@@ -43,10 +47,15 @@ local CLONE_IMG = "Fishing_clone.png"
 local CLONE_ROI = { 915, 173, 961, 217 }
 local CLONE_HALF_W, CLONE_HALF_H = 20, 15 -- 模板尺寸 40x31 的一半，findPic 返回左上角
 
-local NEEDLE_TIMEOUT = 6000   -- 等待浮标进入完美区域的最长时间(ms)
 local CLONE_CONFIRM_FRAMES = 5 -- 连续 N 帧处于 DO3 状态判定为成功（替代原结算图判定）
 local TOL = 15                 -- 逐通道容差，对应原 Python tol=15
 local MATCH_RATE = 0.6         -- 点匹配率阈值，对应原 Python m >= n * 0.6
+
+-- ============ 精准提竿参数 ============
+local DEAD_WAIT = 1      -- isDisplayDead 单次阻塞上限(秒)，期间区域变色立即返回
+local ZONE_PAD_X = 2     -- 监视区域相对扫描列左右的扩展(px)
+local HIT_MARGIN = 6     -- 浮标位置与完美区域边界的容差(px)
+local ZONE_MIN_H = 6     -- 完美区域最小高度(px)，过滤瞬时单像素误判
 
 -- 从界面读取配置
 function M.readConfig(handle)
@@ -87,23 +96,51 @@ local function findClone()
     return nil
 end
 
--- 打印浮标位置变化与速度（px/s）
-local function logNeedleMove(pos, now, lastPos, lastTick)
-    local dt = now - lastTick
-    local v = dt > 0 and math.abs(pos - lastPos) * 1000 / dt or 0
-    logger.info(string.format("浮标 y=%3d (%+d) 间隔=%2dms 速度=%6.0f px/s",
-        pos, pos - lastPos, dt, v))
+-- 精准提竿：isDisplayDead 事件驱动 + 位置复核
+-- 原理：浮标进入完美区域时，区域内像素被浮标覆盖而发生变化，isDisplayDead 阻塞等待
+--       该变化并立即返回（原生层等待，Lua 侧没有轮询循环，不会持续取像掉帧）；
+--       变化后用 scanColumn 复核浮标位置，避免浮标离开/区域消失造成的误触。
+-- 入参 needle 为本次已取到的浮标位置（nil 表示当前不在扫描列内）
+-- 返回：是否提竿, 浮标位置, 事件到提竿的耗时(ms)
+local function tryPull(cfg, ps, pe, needle)
+    local pos, delayMs
+    if needle and needle >= ps - HIT_MARGIN and needle <= pe + HIT_MARGIN then
+        -- 快速通道：浮标已在区域内，直接提竿
+        pos, delayMs = needle, 0
+    else
+        local t = tickCount()
+        -- 阻塞等待完美区域像素变化，浮标一进入立即返回
+        if isDisplayDead(cfg.scanX - ZONE_PAD_X, ps, cfg.scanX + ZONE_PAD_X, pe, DEAD_WAIT) then
+            return false
+        end
+        -- 复核：变化后浮标确实在区域内才提竿
+        local _, _, n2 = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+        delayMs = tickCount() - t
+        if not (n2 and n2 >= ps - HIT_MARGIN and n2 <= pe + HIT_MARGIN) then
+            return false
+        end
+        pos = n2
+    end
+
+    doTap(cfg)
+    -- 浮标离开同样是区域变色事件：再等一次，避免同一次经过反复提竿
+    isDisplayDead(cfg.scanX - ZONE_PAD_X, ps, cfg.scanX + ZONE_PAD_X, pe, DEAD_WAIT)
+    return true, pos, delayMs
 end
 
 function M.run(cfg)
     local successCount = 0
+    local hitCount = 0
     local hud = nil
+    local hudText = ""
 
     local function updateHud(state)
         if not cfg.showHud then return end
+        local text = string.format("钓鱼中 [%s]\n成功: %d  命中: %d", state, successCount, hitCount)
+        if text == hudText then return end
+        hudText = text
         if not hud then hud = createHUD() end
-        showHUD(hud, string.format("钓鱼中 [%s]\n成功次数: %d", state, successCount),
-            14, "0xffffffff", "0xCC222222", 0, 20, 180, 360, 120)
+        showHUD(hud, text, 14, "0xffffffff", "0xCC222222", 0, 20, 180, 360, 120)
     end
 
     logger.info("=== 开始钓鱼 ===")
@@ -125,22 +162,20 @@ function M.run(cfg)
 
     local endTime = tickCount() + cfg.loopTime * 1000
     local cloneSkip = 0
-    local pullPhase = false -- 提竿后进入拉竿阶段，期间持续观测浮标
-    local obsPos, obsTick   -- 观测用的上一次浮标位置/时间
+    local zoneLogged = false
     updateHud("待机")
 
     while tickCount() < endTime do
-        -- 与 Python 一致：各状态基于独立采样判定
-        local do1 = isMatch(DO1)
-        local do4 = isMatch(DO4)
-        local do3Matched = isMatch(DO3)
+        -- 状态检测：DO1/DO3/DO4 位于同一区域，合并为一次取色判定；TARGET 单独一次
+        local st = pixel.matchStates({ DO1 = DO1, DO3 = DO3, DO4 = DO4 }, TOL, MATCH_RATE)
+        local do1, do3Matched, do4 = st.DO1, st.DO3, st.DO4
         local textMatched = isMatch(TARGET)
 
         -- 状态1：出现开始按钮
         if do1 then
             logger.info("点击开始")
             doTap(cfg)
-            pullPhase = false
+            zoneLogged = false
             updateHud("抛竿")
         end
 
@@ -148,54 +183,30 @@ function M.run(cfg)
         if do4 then
             logger.info("提竿")
             doTap(cfg)
-            pullPhase = true
-            obsPos, obsTick = nil, nil
             updateHud("提竿")
         end
 
-        -- 浮标运动观测（拉竿阶段）：打印位置变化与速度
-        if pullPhase then
-            local now = tickCount()
-            local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-            if pos then
-                if obsPos and pos ~= obsPos then
-                    logNeedleMove(pos, now, obsPos, obsTick)
-                end
-                obsPos, obsTick = pos, now
-            else
-                -- 浮标离开扫描列，重新等待首次出现
-                obsPos, obsTick = nil, nil
-            end
-        end
-
-        -- 完美区域提示出现：追踪浮标并精准提竿
+        -- 完美区域提示出现：isDisplayDead 检测区域变色（浮标进入）→ 精准提竿
         if textMatched and not do3Matched then
-            local pStart, pEnd = pixel.findPerfectZone(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-            if pStart then
-                logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
-                updateHud("追踪浮标")
-                local lastPos, lastTick
-                local needleEnd = tickCount() + NEEDLE_TIMEOUT
-                while tickCount() < needleEnd do
-                    local now = tickCount()
-                    local pos = pixel.findNeedle(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-                    if pos then
-                        if lastPos and pos ~= lastPos then
-                            logNeedleMove(pos, now, lastPos, lastTick)
-                        end
-                        lastPos, lastTick = pos, now
-                        if pos >= pStart + 5 and pos <= pEnd + 5 then
-                            logger.info(string.format("命中! pos=%d", pos))
-                            doTap(cfg)
-                            sleep(1000)
-                            break
-                        end
-                    else
-                        lastPos, lastTick = nil, nil
-                    end
-                    sleep(5)
+            local pStart, pEnd, needle = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+            -- 完美区域高度至少 ZONE_MIN_H，过滤瞬时出现的单像素误判
+            if pStart and (pEnd - pStart) >= ZONE_MIN_H then
+                if not zoneLogged then
+                    logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
+                    zoneLogged = true
                 end
+                updateHud("追踪浮标")
+                local hit, pos, delayMs = tryPull(cfg, pStart, pEnd, needle)
+                if hit then
+                    hitCount = hitCount + 1
+                    logger.info(string.format("命中! pos=%d 区域=%d-%d 反应=%dms",
+                        pos, pStart, pEnd, delayMs))
+                end
+            else
+                zoneLogged = false
             end
+        else
+            zoneLogged = false
         end
 
         -- DO3 状态持续出现（无文字提示）→ 结算弹窗出现 → 计数并点击 X 关闭
@@ -208,7 +219,6 @@ function M.run(cfg)
                     successCount = successCount + 1
                     logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
                     updateHud("结算")
-                    pullPhase = false
                     tap(cx + CLONE_HALF_W, cy + CLONE_HALF_H)
                     endTime = tickCount() + cfg.loopTime * 1000
                     sleep(1000)

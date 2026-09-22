@@ -2,6 +2,8 @@
 -- 像素/颜色工具
 -- getScreenPixel 返回的 arr 颜色为 BBGGRR（十进制，BGR 序）；getPixelColor 返回值为 RRGGBB 序。
 -- 比色串格式："x|y|BBGGRR-偏色,..."
+-- 性能约定：每次 getScreenPixel 都是一次屏幕取像，代价远大于 Lua 运算，
+--           因此同一区域的多个判定应尽量合并为一次取色。
 
 local _M = {}
 
@@ -18,6 +20,14 @@ function _M.parsePoints(colorStr)
         end
     end
     return pts
+end
+
+-- 逐点判定：实际色与参考色逐通道容差比较
+local function pointMatch(arr, w, x1, y1, p, tol)
+    local c = arr[(p.y - y1) * w + (p.x - x1 + 1)]
+    if not c then return false end
+    local r, g, b = colorToRGB(c)
+    return math.abs(r - p.r) <= tol and math.abs(g - p.g) <= tol and math.abs(b - p.b) <= tol
 end
 
 -- 多点比色匹配率：逐点逐通道容差比较（对应 Python _check_colors，tol=15）
@@ -38,15 +48,69 @@ function _M.matchRatio(colorStr, tol)
     if not w or w <= 0 then return 0, total end
     local matched = 0
     for _, p in ipairs(pts) do
-        local c = arr[(p.y - y1) * w + (p.x - x1 + 1)]
-        if c then
-            local r, g, b = colorToRGB(c)
-            if math.abs(r - p.r) <= tol and math.abs(g - p.g) <= tol and math.abs(b - p.b) <= tol then
-                matched = matched + 1
-            end
+        if pointMatch(arr, w, x1, y1, p, tol) then
+            matched = matched + 1
         end
     end
     return matched, total
+end
+
+-- 批量比色：同一屏幕区域的多个比色串合并为一次取色完成判定
+-- colorStrs: { 名称 = 比色串, ... }（各串应位于相近区域，并集区域不宜过大）
+-- 返回: { 名称 = 是否达标(匹配率 >= rate), ... }
+function _M.matchStates(colorStrs, tol, rate)
+    tol = tol or 15
+    rate = rate or 0.6
+    local names, groups = {}, {}
+    local x1, y1, x2, y2 = math.huge, math.huge, -math.huge, -math.huge
+    for name, str in pairs(colorStrs) do
+        local pts = _M.parsePoints(str)
+        names[#names + 1] = name
+        groups[#names] = pts
+        for _, p in ipairs(pts) do
+            if p.x < x1 then x1 = p.x end
+            if p.y < y1 then y1 = p.y end
+            if p.x > x2 then x2 = p.x end
+            if p.y > y2 then y2 = p.y end
+        end
+    end
+    local out = {}
+    if #names == 0 or x1 == math.huge then return out end
+    local w, _, arr = getScreenPixel(x1, y1, x2, y2)
+    for i, name in ipairs(names) do
+        local pts = groups[i]
+        local matched = 0
+        if w and w > 0 then
+            for _, p in ipairs(pts) do
+                if pointMatch(arr, w, x1, y1, p, tol) then
+                    matched = matched + 1
+                end
+            end
+        end
+        out[name] = (#pts > 0 and matched >= #pts * rate)
+    end
+    return out
+end
+
+-- 单次取色完成扫描列的两项检测：完美区域（绿色）与浮标位置（奶油色）
+-- 完美区域（对应 Python 绿色检测）：G>225 且 B<210 且 R<165 且 (G-B)>15 且 (G-R)>60
+-- 返回 pStart, pEnd（完美区域上下界）, needle（浮标 y 坐标）；未找到为 nil
+function _M.scanColumn(scanX, y1, y2)
+    local w, h, arr = getScreenPixel(scanX - 1, y1, scanX + 1, y2)
+    if not w or w <= 0 then return nil end
+    local col = 2 -- 取 x = scanX 一列
+    local pStart, pEnd, needle
+    for row = 0, h - 1 do
+        local r, g, b = colorToRGB(arr[row * w + col])
+        if not needle and r == 255 and g == 254 and b == 180 then
+            needle = y1 + row
+        end
+        if g > 225 and b < 210 and r < 165 and (g - b) > 15 and (g - r) > 60 then
+            if not pStart then pStart = y1 + row end
+            pEnd = y1 + row
+        end
+    end
+    return pStart, pEnd, needle
 end
 
 -- 调试输出：打印每个点的参考色与实际色（实际色已修正为真实 RGB）
@@ -69,41 +133,6 @@ function _M.dumpPoints(colorStr, label)
         print(string.format("  %s (%d,%d) 参考=(%3d,%3d,%3d) 实际=(%3d,%3d,%3d)",
             label, p.x, p.y, p.r, p.g, p.b, r, g, b))
     end
-end
-
--- 在竖直扫描列上寻找完美区域（对应 Python 的绿色检测）
--- Python 源码基于 BGR 图像: g=G>225, r=B<210, b=R<165, G-B>15, G-R>60
--- 此处 r,g,b 为真实 RGB：G>225 且 B<210 且 R<165 且 (G-B)>15 且 (G-R)>60
--- 返回 p_start, p_end（未找到返回 nil）
-function _M.findPerfectZone(scanX, y1, y2)
-    local w, h, arr = getScreenPixel(scanX - 1, y1, scanX + 1, y2)
-    if not w or w < 0 then return nil end
-    local col = 2 -- 取 x = scanX 一列
-    local pStart, pEnd
-    for row = 0, h - 1 do
-        local r, g, b = colorToRGB(arr[row * w + col])
-        if g > 225 and b < 210 and r < 165 and (g - b) > 15 and (g - r) > 60 then
-            if not pStart then pStart = y1 + row end
-            pEnd = y1 + row
-        end
-    end
-    if pStart then return pStart, pEnd end
-    return nil
-end
-
--- 在竖直扫描列上寻找浮标位置（颜色精确匹配 RGB(255,254,180)）
--- 返回浮标 y 坐标（未找到返回 nil）
-function _M.findNeedle(scanX, y1, y2)
-    local w, h, arr = getScreenPixel(scanX - 1, y1, scanX + 1, y2)
-    if not w or w < 0 then return nil end
-    local col = 2
-    for row = 0, h - 1 do
-        local r, g, b = colorToRGB(arr[row * w + col])
-        if r == 255 and g == 254 and b == 180 then
-            return y1 + row
-        end
-    end
-    return nil
 end
 
 return _M
