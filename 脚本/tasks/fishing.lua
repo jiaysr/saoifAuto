@@ -6,10 +6,13 @@
 -- 性能说明：追踪阶段不轮询浮标位置，而是用 isDisplayDead 在原生层等待
 --           完美区域像素变化（浮标进入即变色），Lua 侧几乎零开销；
 --           状态判定把同一区域的 DO1/DO3/DO4 合并为一次取色。
+-- 弹窗处理：主循环每轮优先调用 popup.checkLoginBonus()，命中随机弹窗
+--           （如每日登录奖励）时处理完再继续钓鱼状态判定。
 
 local logger = require("core.logger")
 local pixel = require("core.pixel")
 local dispatcher = require("core.dispatcher")
+local popup = require("core.popup")
 
 local M = { name = "钓鱼" }
 
@@ -166,6 +169,12 @@ function M.run(cfg)
     updateHud("待机")
 
     while tickCount() < endTime do
+        -- 优先处理随机弹窗（如每日登录奖励），处理完再继续本轮判定
+        if popup.checkLoginBonus() then
+            cloneSkip = 0
+            zoneLogged = false
+        end
+
         -- 状态检测：DO1/DO3/DO4 位于同一区域，合并为一次取色判定；TARGET 单独一次
         local st = pixel.matchStates({ DO1 = DO1, DO3 = DO3, DO4 = DO4 }, TOL, MATCH_RATE)
         local do1, do3Matched, do4 = st.DO1, st.DO3, st.DO4
