@@ -3,11 +3,22 @@
 -- 移植自 D:\project\AutoScript\SaoifAutoScript\tasks\Fishing\script_task.py
 -- 设备分辨率 720x1280，横屏显示（rotate=1），脚本坐标基于横屏 1280x720
 --
--- 性能说明：追踪阶段不轮询浮标位置，而是用 isDisplayDead 在原生层等待
---           完美区域像素变化（浮标进入即变色），Lua 侧几乎零开销；
---           状态判定把同一区域的 DO1/DO3/DO4 合并为一次取色。
+-- 性能说明：追踪阶段每次只取一列像素（1 次取像，本机约 50ms）直接找浮标颜色，
+--           不做事件复核；状态判定把同一区域的 DO1/DO3/DO4 合并为一次取色。
 -- 弹窗处理：主循环每轮优先调用 popup.checkLoginBonus()，命中随机弹窗
 --           （如每日登录奖励）时处理完再继续钓鱼状态判定。
+-- 参数覆盖：HIT_MARGIN/LEAD_* 等可在 cfg 里传入覆盖（用于批量对比实验），
+--           不传时使用下方默认值。
+--
+-- 完美判定口径：提竿成功后仪表会"定格"，定格位置近似游戏判定时刻的浮标位置；
+--               提竿后再取像两次读取该位置（两帧相同即定格），位置落在完美区域内
+--               才计"完美区域命中"。
+-- 提前量：实测取像到点击生效约 50~100ms，浮标速度 0.3~0.8px/ms，判定时浮标已
+--         移动 20~60px，而完美区域约 19px 高 —— 必须提前出手。LEAD_MS 为初值，
+--         运行中会按每次命中实测的延迟（定格位置-触发位置)/速度 做指数平滑自适应，
+--         自动收敛到本机当前的实际延迟。
+-- 提前量扫描（6 条鱼/组，leadMinV=0.1，hitMargin=0）：
+--   无提前量：完美率 12%   lead50：36%   lead75：40%   lead100：7%   → 初值取 75
 
 local logger = require("core.logger")
 local pixel = require("core.pixel")
@@ -55,10 +66,16 @@ local TOL = 15                 -- 逐通道容差，对应原 Python tol=15
 local MATCH_RATE = 0.6         -- 点匹配率阈值，对应原 Python m >= n * 0.6
 
 -- ============ 精准提竿参数 ============
-local DEAD_WAIT = 1      -- isDisplayDead 单次阻塞上限(秒)，期间区域变色立即返回
-local ZONE_PAD_X = 2     -- 监视区域相对扫描列左右的扩展(px)
-local HIT_MARGIN = 6     -- 浮标位置与完美区域边界的容差(px)
-local ZONE_MIN_H = 6     -- 完美区域最小高度(px)，过滤瞬时单像素误判
+local HIT_MARGIN = 0      -- 浮标位置与完美区域边界的容差(px)；0=只有真正进入区域才提竿
+local ZONE_MIN_H = 6      -- 完美区域最小高度(px)，过滤瞬时单像素误判
+local TRACK_POLL_MS = 1200 -- 单次提竿追踪的最长时间(ms)，超时回主循环刷新状态
+local LEAD_MIN_V = 0.1    -- 提前量预判阈值(px/ms)，低于该速度的浮标直接等进区
+local LEAD_MS = 75        -- 提前量初值(ms)，运行中按实测延迟自适应微调
+local LEAD_EMA = 0.3      -- 自适应平滑系数：新实测延迟占的比重
+local LEAD_MIN_MS = 30    -- 自适应下限(ms)
+local LEAD_MAX_MS = 150   -- 自适应上限(ms)
+local LEAVE_WAIT_MS = 600 -- 提竿后等浮标离开窗口的上限(ms)，避免同一趟重复提竿
+local VERIFY_BACK_MS = 60 -- 完美判定回推量(ms)：复核第一帧比点击时刻晚约这么多
 
 -- 从界面读取配置
 function M.readConfig(handle)
@@ -99,47 +116,135 @@ local function findClone()
     return nil
 end
 
--- 精准提竿：isDisplayDead 事件驱动 + 位置复核
--- 原理：浮标进入完美区域时，区域内像素被浮标覆盖而发生变化，isDisplayDead 阻塞等待
---       该变化并立即返回（原生层等待，Lua 侧没有轮询循环，不会持续取像掉帧）；
---       变化后用 scanColumn 复核浮标位置，避免浮标离开/区域消失造成的误触。
--- 入参 needle 为本次已取到的浮标位置（nil 表示当前不在扫描列内）
--- 返回：是否提竿, 浮标位置, 事件到提竿的耗时(ms)
-local function tryPull(cfg, ps, pe, needle)
-    local pos, delayMs
-    if needle and needle >= ps - HIT_MARGIN and needle <= pe + HIT_MARGIN then
-        -- 快速通道：浮标已在区域内，直接提竿
-        pos, delayMs = needle, 0
-    else
-        local t = tickCount()
-        -- 阻塞等待完美区域像素变化，浮标一进入立即返回
-        if isDisplayDead(cfg.scanX - ZONE_PAD_X, ps, cfg.scanX + ZONE_PAD_X, pe, DEAD_WAIT) then
+-- 精准提竿：高频轮询浮标位置，进区立即提竿；快速浮标按速度预判提前出手
+-- 方案取舍（实测于 Pixel 4 / SDK29）：
+--   1) 事件触发后再截图复核：复核需要 50ms 量级，回来时浮标已越过边界 5~20px，
+--      位置校验会把大量真实入区丢弃（浮标来回穿过却不提竿）；
+--   2) 事件触发即提竿：完美区域出现/刷新时的自身动画同样会产生像素变化，
+--      导致浮标还没进区就提前点击；
+--   3) 本实现：每次只取一列像素直接找浮标颜色。慢速浮标（<LEAD_MIN_V）等它真正
+--      进入区域才提竿；快速浮标按速度推算取像+点击延迟后的落点，落点在区域内
+--      时提前出手。提前量 tune.leadMs 每次命中后按实测延迟自适应。
+-- 单次最多追踪 TRACK_POLL_MS 后返回主循环，保证结算/弹窗等状态判定不被阻塞。
+-- tune 为本次运行的调参状态 { leadMs = 毫秒 }
+-- 返回：是否提竿, 触发时浮标位置, 是否提前量触发, 是否完美区域命中, 追踪耗时(ms)
+local function tryPull(cfg, tune, ps, pe, needle)
+    local hitMargin = cfg.hitMargin or HIT_MARGIN
+    local leadMinV = cfg.leadMinV or LEAD_MIN_V
+    local trackPollMs = cfg.trackPollMs or TRACK_POLL_MS
+    local leaveWaitMs = cfg.leaveWaitMs or LEAVE_WAIT_MS
+    local verifyBackMs = cfg.verifyBackMs or VERIFY_BACK_MS
+
+    local t = tickCount()
+    local deadline = t + trackPollMs
+    local nd, ndT = needle, t
+    local prevNd, prevT = nil, nil
+
+    -- 提竿后的完美判定 + 提前量自适应
+    -- 仪表在提竿成功后会"定格"，取像两次（两帧相同即定格）；
+    -- 定格位置即判定时刻的浮标位置，用它判定是否算"完美区域命中"；
+    -- 同时用（定格位置-触发位置)/速度 估算取像到判定生效的实际延迟，修正提前量。
+    local function verifyAfterTap(vHint, nd0)
+        local ps2, pe2, n2 = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+        local t2 = tickCount()
+        local ps3, pe3, n3 = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+        local t3 = tickCount()
+        local v = vHint
+        if n2 and n3 and ps3 and t3 > t2 and n3 ~= n2 then
+            v = (n3 - n2) / (t3 - t2) -- 未定格时用两帧复核速度更接近点击时刻
+        elseif n2 and n3 and n3 == n2 then
+            v = 0 -- 定格：位置即判定位置，无需回推
+        end
+        if not n2 or not ps2 then
+            logger.debug(string.format("提竿复核: 区域=%d-%d 提竿后取像失败", ps, pe))
             return false
         end
-        -- 复核：变化后浮标确实在区域内才提竿
-        local _, _, n2 = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-        delayMs = tickCount() - t
-        if not (n2 and n2 >= ps - HIT_MARGIN and n2 <= pe + HIT_MARGIN) then
-            return false
+        -- 自适应提前量：实测延迟 = 判定位置与触发取样位置的位移 / 速度
+        if vHint and math.abs(vHint) >= 0.15 then
+            local delay = (n2 - nd0) / vHint
+            if delay > 15 and delay < 250 then
+                local old = tune.leadMs
+                tune.leadMs = old * (1 - LEAD_EMA) + delay * LEAD_EMA
+                if tune.leadMs < LEAD_MIN_MS then tune.leadMs = LEAD_MIN_MS end
+                if tune.leadMs > LEAD_MAX_MS then tune.leadMs = LEAD_MAX_MS end
+                logger.debug(string.format("自适应提前量: 实测延迟=%.0fms %.0f→%.0fms",
+                    delay, old, tune.leadMs))
+            end
         end
-        pos = n2
+        local posTap = n2 - (v or 0) * verifyBackMs
+        local inZone = posTap >= ps2 and posTap <= pe2
+        logger.debug(string.format("提竿复核: 区域=%d-%d 触发=%d v=%.2f 提竿后=%d 估算点击=%.0f 完美=%s",
+            ps2, pe2, nd0, v or 0, n2, posTap, tostring(inZone)))
+        return inZone
     end
 
-    doTap(cfg)
-    -- 浮标离开同样是区域变色事件：再等一次，避免同一次经过反复提竿
-    isDisplayDead(cfg.scanX - ZONE_PAD_X, ps, cfg.scanX + ZONE_PAD_X, pe, DEAD_WAIT)
-    return true, pos, delayMs
+    -- 等浮标离开提竿窗口，避免同一趟经过反复提竿
+    local function waitLeave()
+        local leaveEnd = tickCount() + leaveWaitMs
+        while tickCount() < leaveEnd do
+            local _, _, n = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+            if not n or n < ps - hitMargin or n > pe + hitMargin then
+                break
+            end
+        end
+    end
+
+    while true do
+        if nd and nd >= ps - hitMargin and nd <= pe + hitMargin then
+            -- 取样时已在区域内（HIT_MARGIN=0 时即"真正进区"）→ 立即提竿
+            local vHint = (prevNd and ndT > prevT) and (nd - prevNd) / (ndT - prevT) or nil
+            doTap(cfg)
+            local perfect = verifyAfterTap(vHint, nd)
+            waitLeave()
+            return true, nd, false, perfect, tickCount() - t
+        end
+        -- 快速浮标预判：按相邻两帧速度推算"取像+点击"延迟后的落点
+        if nd and prevNd and ndT > prevT then
+            local v = (nd - prevNd) / (ndT - prevT)
+            if math.abs(v) >= leadMinV then
+                local pred = nd + v * tune.leadMs
+                if pred >= ps and pred <= pe then
+                    logger.debug(string.format("预判提竿 v=%.2fpx/ms %d→%d 预测=%.0f 提前量=%.0fms 区域=%d-%d",
+                        v, prevNd, nd, pred, tune.leadMs, ps, pe))
+                    doTap(cfg)
+                    local perfect = verifyAfterTap(v, nd)
+                    waitLeave()
+                    return true, nd, true, perfect, tickCount() - t
+                end
+            end
+        end
+        if tickCount() >= deadline then
+            return false
+        end
+        -- 高频轮询：一次取像得到区域范围与浮标位置
+        local ps2, pe2, nd2 = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
+        if not ps2 then
+            return false -- 区域消失（本轮结束/进入结算）
+        end
+        ps, pe = ps2, pe2
+        prevNd, prevT = nd, ndT
+        nd, ndT = nd2, tickCount()
+    end
 end
 
 function M.run(cfg)
     local successCount = 0
-    local hitCount = 0
+    local hitCount = 0     -- 命中次数（触发提竿的次数）
+    local perfectCount = 0 -- 其中判定时刻仍在完美区域内的次数
     local hud = nil
     local hudText = ""
+    local zoneMinH = cfg.zoneMinH or ZONE_MIN_H
+    local tune = { leadMs = cfg.leadMs or LEAD_MS } -- 自适应提前量状态（每次运行从初值开始）
 
-    local function updateHud(state)
+    local runStart = tickCount()
+
+    -- HUD：钓鱼中/成功条数/平均每条耗时 + 命中次数/完美区域命中次数
+    local function updateHud()
         if not cfg.showHud then return end
-        local text = string.format("钓鱼中 [%s]\n成功: %d  命中: %d", state, successCount, hitCount)
+        local elapsedS = (tickCount() - runStart) / 1000
+        local spd = successCount > 0 and math.floor(elapsedS / successCount + 0.5) or 0
+        local text = string.format("钓鱼中 成功 %d 条  速度 %d 秒/条\n命中 %d 次  完美区域 %d 次  提前量 %dms",
+            successCount, spd, hitCount, perfectCount, math.floor(tune.leadMs + 0.5))
         if text == hudText then return end
         hudText = text
         if not hud then hud = createHUD() end
@@ -147,6 +252,9 @@ function M.run(cfg)
     end
 
     logger.info("=== 开始钓鱼 ===")
+    local dw, dh = getDisplaySize()
+    logger.info(string.format("设备: %s %s SDK=%d 显示=%dx%d rotate=%d",
+        tostring(getBrand()), tostring(getModel()), getSdkVersion(), dw, dh, getDisplayRotate()))
     logger.info(string.format("参数: 单轮超时=%ds 目标次数=%d 按钮=(%d,%d) 扫描列X=%d 区域Y=%d~%d",
         cfg.loopTime, cfg.maxCatch, cfg.clickX, cfg.clickY, cfg.scanX, cfg.zoneY1, cfg.zoneY2))
 
@@ -166,7 +274,7 @@ function M.run(cfg)
     local endTime = tickCount() + cfg.loopTime * 1000
     local cloneSkip = 0
     local zoneLogged = false
-    updateHud("待机")
+    updateHud()
 
     while tickCount() < endTime do
         -- 优先处理随机弹窗（如每日登录奖励），处理完再继续本轮判定
@@ -185,31 +293,33 @@ function M.run(cfg)
             logger.info("点击开始")
             doTap(cfg)
             zoneLogged = false
-            updateHud("抛竿")
+            updateHud()
         end
 
         -- 状态4：提竿时机
         if do4 then
             logger.info("提竿")
             doTap(cfg)
-            updateHud("提竿")
+            updateHud()
         end
 
-        -- 完美区域提示出现：isDisplayDead 检测区域变色（浮标进入）→ 精准提竿
+        -- 完美区域提示出现：高频轮询浮标，进区立即提竿
         if textMatched and not do3Matched then
             local pStart, pEnd, needle = pixel.scanColumn(cfg.scanX, cfg.zoneY1, cfg.zoneY2)
-            -- 完美区域高度至少 ZONE_MIN_H，过滤瞬时出现的单像素误判
-            if pStart and (pEnd - pStart) >= ZONE_MIN_H then
+            -- 完美区域高度至少 zoneMinH，过滤瞬时出现的单像素误判
+            if pStart and pEnd and (pEnd - pStart) >= zoneMinH then
                 if not zoneLogged then
                     logger.info(string.format("完美区域: %d-%d", pStart, pEnd))
                     zoneLogged = true
                 end
-                updateHud("追踪浮标")
-                local hit, pos, delayMs = tryPull(cfg, pStart, pEnd, needle)
+                local hit, pos, lead, perfect, trackMs = tryPull(cfg, tune, pStart, pEnd, needle)
                 if hit then
                     hitCount = hitCount + 1
-                    logger.info(string.format("命中! pos=%d 区域=%d-%d 反应=%dms",
-                        pos, pStart, pEnd, delayMs))
+                    if perfect then perfectCount = perfectCount + 1 end
+                    local tag = perfect and "区域" or (lead and "提前量" or "点击时已出区")
+                    logger.info(string.format("命中!(%s) 追踪=%dms 浮标=%d 区域=%d-%d",
+                        tag, trackMs, pos, pStart, pEnd))
+                    updateHud()
                 end
             else
                 zoneLogged = false
@@ -227,7 +337,7 @@ function M.run(cfg)
                 if cx then
                     successCount = successCount + 1
                     logger.info(string.format("钓鱼成功! +1 (共 %d)", successCount))
-                    updateHud("结算")
+                    updateHud()
                     tap(cx + CLONE_HALF_W, cy + CLONE_HALF_H)
                     endTime = tickCount() + cfg.loopTime * 1000
                     sleep(1000)
@@ -249,6 +359,10 @@ function M.run(cfg)
         hud = nil
     end
     setSnapCacheTime(100)
+    local elapsedS = (tickCount() - runStart) / 1000
+    logger.info(string.format("统计: 成功=%d 命中=%d 完美区域=%d 完美率=%.0f%% 提前量=%.0fms 用时=%.0fs",
+        successCount, hitCount, perfectCount,
+        hitCount > 0 and perfectCount * 100 / hitCount or 0, tune.leadMs, elapsedS))
     logger.info(string.format("========== 结束，共钓鱼 %d 次 ==========", successCount))
 end
 
