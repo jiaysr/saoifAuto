@@ -207,27 +207,26 @@ function M.open(opts)
     -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
     -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
     -- 本游戏恒为横屏，故取 max 为宽、min 为高。
-        -- ==================== 两套固定尺寸（UI 只按这两种尺寸维护样式） ====================
-    -- 屏幕：本机横屏 1280x720 / 竖屏 720x1280；getDisplaySize() 顺序不随姿态变化，
-    -- 故取 max/min 得当次可用宽高，再用屏幕旋转判断当前姿态，直接套固定尺寸。
+            -- ==================== 两套固定尺寸（UI 只按这两种尺寸维护样式） ====================
+    -- ⚠ 本环境（云机/模拟器）getDisplaySize() 与 getDisplayRotate() 都不随姿态变化：
+    --    实测横屏游戏下 getDisplaySize 仍返回 720x1280、getDisplayRotate 恒为竖屏值，
+    --    照它判断会把竖屏尺寸(640x980)套到 720 高的横屏上 → 窗口被系统直接关掉。
+    --    因此姿态改用常量指定：默认 landscape（游戏常态）；要在竖屏下调试就改成 "portrait"。
+    local ORIENT = "landscape"          -- "landscape" | "portrait"
+    local wvW, wvH
+    if ORIENT == "portrait" then
+        wvW, wvH = 640, 980             -- 竖屏（屏幕 720x1280）
+    else
+        wvW, wvH = 1100, 570            -- 横屏（屏幕 1280x720，游戏常态）
+    end
+    -- 兜底：不允许超过当次屏幕（按 max/min 取可用宽高，与姿态无关）
     local sw, sh = getDisplaySize()
     sw = tonumber(sw) or 720
     sh = tonumber(sh) or 1280
-    local W = math.max(sw, sh)
-    local H = math.min(sw, sh)
-    local rot = tonumber(getDisplayRotate()) or 0
-    local landscape = (rot == 90 or rot == 270)   -- Android: 0/180=竖屏, 90/270=横屏
-    local wvW, wvH
-    if landscape then
-        wvW, wvH = 1100, 570      -- 横屏（游戏常态）
-    else
-        wvW, wvH = 640, 980       -- 竖屏
-    end
-    -- 极端兜底：不允许超过当次屏幕
-    local curW = landscape and W or H
-    local curH = landscape and H or W
-    if wvW > curW - 40 then wvW = curW - 40 end
-    if wvH > curH - 120 then wvH = curH - 120 end
+    local availW, availH = math.max(sw, sh), math.min(sw, sh)
+    if ORIENT == "portrait" then availW, availH = math.min(sw, sh), math.max(sw, sh) end
+    if wvW > availW - 40 then wvW = availW - 40 end
+    if wvH > availH - 120 then wvH = availH - 120 end
 
 local layW, layH = wvW + 40, wvH + 100
     if not ui.newLayout(WINDOW, layW, layH) then
