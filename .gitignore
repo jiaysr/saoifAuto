@@ -19,3 +19,7 @@
 # cache/                —— lrjl 规范中属「自动生成」目录，但 cache/pub/自定义库.lua
 #                          是本项目手写的公共库文件，需随项目提交
 # obf_selection.json    —— IDE 写出的混淆文件选择状态，作为打包配置保留
+
+# ===== IDE 会在 界面/ 目录自动回写的 H5 副本（忽略，页面源码见 脚本/ui/h5_page.lua） =====
+界面/h5_probe.html
+界面/saoif_h5.html
