@@ -204,18 +204,11 @@ function M.open(opts)
     end
     logger.info(string.format("[H5] 页面已写入 %s（%d 字节）", htmlPath, #page.html))
 
-    -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
-    -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
-    -- 本游戏恒为横屏，故取 max 为宽、min 为高。
-    local sw, sh = getDisplaySize()
-    sw = tonumber(sw) or 1280
-    sh = tonumber(sh) or 720
-    local W = math.max(sw, sh)
-    local H = math.min(sw, sh)
-    local wvW = math.min(W - 60, 1100)
-    local wvH = math.min(H - 150, 620)
-    if wvW < 480 then wvW = 480 end
-    if wvH < 320 then wvH = 320 end
+    local dw, dh = getDisplaySize()
+    local wvW = math.min((tonumber(dw) or 1280) - 80, 1100)
+    local wvH = math.min((tonumber(dh) or 720) - 170, 620)
+    if wvW < 640 then wvW = 640 end
+    if wvH < 400 then wvH = 400 end
 
     -- 每次运行使用唯一的窗口/控件名：避免上次运行残留的窗口/WebView 造成消息串台
     -- （布局名同时是悬浮窗标题，因此用可读标题 + 唯一后缀）
