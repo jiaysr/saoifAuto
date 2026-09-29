@@ -23,6 +23,39 @@
 4. 在懒人精灵中连接设备。
 5. 打开游戏并停留在主界面，运行脚本。
 
+## H5 界面（WebView）
+
+配置界面已从静态 XML（`界面/saoif.ui`，保留作后备）迁移为 H5（WebView）实现：
+
+| 文件 | 说明 |
+| :--- | :--- |
+| `脚本/ui/h5_page.lua` | **H5 页面源码（唯一来源）**：HTML/CSS/JS 以 UTF-8 长字符串内嵌，直接编辑此文件 |
+| `脚本/ui/h5_bridge.lua` | WebView 窗口管理 + Lua ↔ JS 变量通道（Base64(JSON) 协议）+ 实时校验 + 配置持久化 |
+| `脚本/saoif.lua` | 主流程：组装功能列表/初值 → 打开 H5 界面 → Lua 侧校验 → 分发任务 |
+| `脚本/tasks/fishing.lua` | 任务模块提供 `name` / `desc` / `defaults`，界面功能卡片与默认值由此自动生成 |
+
+> 为什么内嵌：脚本运行时项目文件不在设备工作目录中（已验证不可读），
+> 页面需由 Lua 写入 `sdcard/saoif_h5_page.html` 后再由 WebView 加载。
+> 若 `界面/` 下出现同名 HTML 副本，属于 IDE 自动生成，请忽略，以 `脚本/ui/h5_page.lua` 为准。
+
+### 变量通道
+
+- JS → Lua：`window.bridge.callLua("__h5_onMessage('<base64>')")`
+- Lua → JS：`ui.callJs(web, "javascript:APP.recv('<base64>')")`
+- 消息类型：`ready / ack / change / submit / cancel / ping / probe / jserror` ↔ `init / hint / error / pong`
+- 每次运行使用唯一窗口名 + 会话号（sid）：上次运行残留页面的事件会被忽略
+- 初值下发带 ack + 重发，页面重建也不会丢初始化数据
+
+### 连通性自检
+
+1. 在设备上创建空标记文件 `/sdcard/saoif_h5_autotest`（可用文件管理器或任意脚本创建）
+2. 运行脚本：界面会模拟「切页 → 改参数 → 保存并运行」，日志打印回传的完整配置，随后自动删除标记
+3. 也可在界面右上角点击【连通自检】：Ping/Pong 往返并在底栏显示 Lua 时间与当前变量
+
+### 配置持久化
+
+点击【保存并运行】后，完整配置保存到 `/sdcard/saoif_h5_config.json`，下次启动自动带出。
+
 ## 注意事项
 
 - 游戏界面语言请保持为繁体中文，否则图像识别可能失效。
