@@ -207,44 +207,29 @@ function M.open(opts)
     -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
     -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
     -- 本游戏恒为横屏，故取 max 为宽、min 为高。
+        -- ==================== 两套固定尺寸（UI 只按这两种尺寸维护样式） ====================
+    -- 屏幕：本机横屏 1280x720 / 竖屏 720x1280；getDisplaySize() 顺序不随姿态变化，
+    -- 故取 max/min 得当次可用宽高，再用屏幕旋转判断当前姿态，直接套固定尺寸。
     local sw, sh = getDisplaySize()
-    sw = tonumber(sw) or 1280
-    sh = tonumber(sh) or 720
+    sw = tonumber(sw) or 720
+    sh = tonumber(sh) or 1280
     local W = math.max(sw, sh)
     local H = math.min(sw, sh)
-    local wvW = math.min(W - 60, 1100)
-    local wvH = math.min(H - 150, 620)
-    if wvW < 480 then wvW = 480 end
-    if wvH < 320 then wvH = 320 end
+    local rot = tonumber(getDisplayRotate()) or 0
+    local landscape = (rot == 90 or rot == 270)   -- Android: 0/180=竖屏, 90/270=横屏
+    local wvW, wvH
+    if landscape then
+        wvW, wvH = 1100, 570      -- 横屏（游戏常态）
+    else
+        wvW, wvH = 640, 980       -- 竖屏
+    end
+    -- 极端兜底：不允许超过当次屏幕
+    local curW = landscape and W or H
+    local curH = landscape and H or W
+    if wvW > curW - 40 then wvW = curW - 40 end
+    if wvH > curH - 120 then wvH = curH - 120 end
 
-    -- 每次运行使用唯一的窗口/控件名：避免上次运行残留的窗口/WebView 造成消息串台
-    -- （布局名同时是悬浮窗标题，因此用可读标题 + 唯一后缀）
-    local tag = tostring(tickCount() % 1000000)
-    WINDOW = "SAOIF 自动助手#" .. tag
-    WEB = "web_" .. tag
-    logger.info(string.format("[H5] 本次会话 窗口=%s 控件=%s", WINDOW, WEB))
-
-    ctx = {
-        ver = opts.ver or "1.0",
-        sid = "sid" .. tag,
-        tasks = opts.tasks or {},
-        configs = opts.configs or {},
-        values = opts.values or {},
-        validate = opts.validate,
-        autoTest = opts.autoTest and true or false,
-        autoFired = false,
-        acked = false,
-        ackedAt = 0,
-        initSentAt = 0,
-        initTries = 0,
-        action = nil,
-        result = nil,
-        ready = false,
-    }
-    warned = {}
-
-    -- 窗口尺寸沿用验证过的组合：布局 = 内容 + 边距，show 居中并隐藏原生底栏
-    local layW, layH = wvW + 40, wvH + 100
+local layW, layH = wvW + 40, wvH + 100
     if not ui.newLayout(WINDOW, layW, layH) then
         logger.error("[H5] newLayout 失败")
         ctx = nil
