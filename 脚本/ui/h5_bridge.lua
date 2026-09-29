@@ -92,7 +92,7 @@ end
 local function pushInit(c)
     c.initSentAt = tickCount()
     c.initTries = (c.initTries or 0) + 1
-    send({ type = "init", data = { ver = c.ver, sid = c.sid, tasks = c.tasks, values = c.values } })
+    send({ type = "init", data = { ver = c.ver, sid = c.sid, tasks = c.tasks, configs = c.configs or {}, values = c.values } })
 end
 
 -- ============ JS -> Lua 入口 ============
@@ -221,6 +221,7 @@ function M.open(opts)
         ver = opts.ver or "1.0",
         sid = "sid" .. tag,
         tasks = opts.tasks or {},
+        configs = opts.configs or {},
         values = opts.values or {},
         validate = opts.validate,
         autoTest = opts.autoTest and true or false,
