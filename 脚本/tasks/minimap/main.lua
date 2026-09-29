@@ -11,7 +11,12 @@ local mm = require("core.minimap")
 local vc = require("core.viewcone")
 local fc = require("core.facing")
 
+local vars = require("tasks.minimap.vars")   -- 变量集中在 vars.lua
 local M = { name = "小地图调试" }
+
+-- H5 界面参数表（界面自动渲染表单）
+    M.id, M.name, M.desc, M.schema, M.defaults = vars.id, vars.name, vars.desc, vars.schema, vars.defaults
+
 
 M.desc = "小地图/大地图识别调试：视野朝向、角色朝向、图标标记，HUD 实时显示；可开启旋转自检。"
 
@@ -21,19 +26,29 @@ local HUD_SIZE = 15
 local HUD_X, HUD_Y = 20, 150
 local HUD_W, HUD_H = 700, 330
 
-function M.readConfig(handle)
+function M.readConfig(cfg)
+    cfg = cfg or {}
+    local d = M.defaults or {}
+    local function num(k)
+        local v = tonumber(cfg[k]); if v == nil then v = d[k] end
+        return v
+    end
+    local function bool(k)
+        local v = cfg[k]; if v == nil then v = d[k] end
+        return v and true or false
+    end
     return {
-        durationS = 30,
-        intervalMs = 500,
-        showHud = true,
-        selfTest = false,
-        debugScan = false,
-        votes = 3,         -- 视野朝向投票帧数
-        minConf = 0.85,    -- 单帧 conf 门限
-        minVotes = 2,      -- 最少一致票数
-        facing = true,     -- 是否显示角色朝向
-        facingCalib = true,-- 是否套用已保存的角色朝向标定
-        facingVotes = 1,   -- 角色朝向投票帧数(1=单帧)
+        durationS   = num("durationS"),
+        intervalMs  = num("intervalMs"),
+        mmShowHud   = bool("mmShowHud"),
+        selfTest    = bool("selfTest"),
+        debugScan   = bool("debugScan"),
+        votes       = num("votes"),
+        minConf     = num("minConf"),
+        minVotes    = num("minVotes"),
+        facing      = bool("facing"),
+        facingCalib = bool("facingCalib"),
+        facingVotes = num("facingVotes"),
     }
 end
 
@@ -57,7 +72,7 @@ end
 function M.run(cfg)
     logger.info("=== 小地图识别调试 ===")
     logger.info(string.format("参数: 时长=%ds 间隔=%dms HUD=%s 自检=%s 视野投票=%d帧 conf门限=%.2f 角色朝向=%s",
-        cfg.durationS, cfg.intervalMs, tostring(cfg.showHud), tostring(cfg.selfTest), cfg.votes, cfg.minConf, tostring(cfg.facing)))
+        cfg.durationS, cfg.intervalMs, tostring(cfg.mmShowHud), tostring(cfg.selfTest), cfg.votes, cfg.minConf, tostring(cfg.facing)))
 
     if cfg.facing then
         if fc.ready() then
@@ -155,7 +170,7 @@ function M.run(cfg)
 
         text = text .. NL .. "图标 " .. fmtBlobs(r and r.blobs)
 
-        if cfg.showHud and text ~= hudText then
+        if cfg.mmShowHud and text ~= hudText then
             hudText = text
             if not hud then hud = createHUD() end
             showHUD(hud, text, HUD_SIZE, "0xffffffff", "0xCC222222", 0, HUD_X, HUD_Y, HUD_W, HUD_H)

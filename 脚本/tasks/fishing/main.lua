@@ -23,25 +23,17 @@ local pixel = require("core.pixel")
 local dispatcher = require("core.dispatcher")
 local popup = require("core.popup")
 
+local vars = require("tasks.fishing.vars")   -- 变量集中在 vars.lua
 local M = { name = "钓鱼" }
 
 -- 功能说明（H5 界面展示用）
 M.desc = "自动钓鱼：识别钓场状态栏（开始/提竿/命中），自动追踪完美区域并提竿，循环钓鱼并统计次数。"
 
 -- 默认参数（H5 界面初值来源；readConfig 缺省值也引用这里，避免两处维护）
-M.defaults = {
-    func        = "钓鱼",
-    loopTime    = 45,
-    maxCatch    = 0,
-    clickX      = 1173,
-    clickY      = 510,
-    scanX       = 1015,
-    zoneY1      = 123,
-    zoneY2      = 524,
-    showHud     = true,
-    debugColors = false,
-    debugTrace  = false,
-}
+    M.id, M.name, M.desc, M.schema, M.defaults = vars.id, vars.name, vars.desc, vars.schema, vars.defaults
+
+
+-- H5 界面参数表：界面据此自动渲染表单（新增参数只改这里，界面代码不用动）
 
 -- ============ 特征比色串（"x|y|BBGGRR-偏色,..."，颜色为原 Python RRGGBB 转 BBGGRR） ============
 -- DO1：可点击"开始"状态
