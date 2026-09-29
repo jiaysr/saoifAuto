@@ -107,39 +107,15 @@ function _G.__h5_onMessage(raw)
     if not c then return end
 
     local t = tostring(msg.type)
-    -- 入站留痕（限量，防风暴刷屏）+ 限流：
-    -- 页面/残留 WebView 实例异常时会疯狂重发 ready，导致 ready→init→ack 风暴
-    -- （现象：日志里"初值已应用（第 1209 次下发）"，设备被拖死、窗口一闪而过）
-    c.recvN = (c.recvN or 0) + 1
-    if c.recvN <= 30 then logger.info("[H5] recv: " .. t .. " sid=" .. tostring(msg.sid)) end
-    local nowT = tickCount()
-    if not c.rateAt or nowT - c.rateAt >= 1000 then
-        c.rateAt, c.rateN = nowT, (c.rateN or 0) + 1
-    else
-        c.rateN = (c.rateN or 0) + 1
-        if c.rateN > 40 then
-            if not c.rateWarned then
-                c.rateWarned = true
-                logger.warn("[H5] 入站报文速率异常（>40/秒），进入限流：只放行 ack/submit/cancel")
-            end
-            if t ~= "ack" and t ~= "submit" and t ~= "cancel" then return end
-        end
-    end
 
     -- 会话校验：忽略上一次运行残留页面发来的消息（它们仍会触发定时器等）
-    if t ~= "ready" and t ~= "diag" and tostring(msg.sid or "") ~= c.sid then
-        logger.info("[H5] 忽略非本会话消息: " .. t .. " sid=" .. tostring(msg.sid) .. " 当前=" .. tostring(c.sid))
+    if t ~= "ready" and tostring(msg.sid or "") ~= c.sid then
+        logger.debug("[H5] 忽略非本会话消息: " .. t)
         return
     end
 
     if t == "ready" then
-        if c.ready then
-            -- 重复 ready（页面被重建/残留实例）只登记不处理，否则 init 无上限重发
-            c.dupReady = (c.dupReady or 0) + 1
-            if c.dupReady <= 5 then logger.warn("[H5] 重复 ready 已忽略（第 " .. c.dupReady .. " 次）") end
-            return
-        end
-        c.ready = true
+        if not c.ready then c.ready = true end
         logger.info("[H5] 页面就绪，下发功能列表与初值")
         -- 短报文探针：确认 callJs 能到达当前活动的 WebView 实例
         local pok = ui.callJs(WEB, "javascript:APP.probe('ready" .. tostring(c.initTries or 0) .. "','" .. c.sid .. "')")
@@ -171,15 +147,7 @@ function _G.__h5_onMessage(raw)
         end
 
     elseif t == "cancel" then
-        -- 正常取消路径：用户点两次"退出"（页面必然已就绪并 ack）。
-        -- 页面未 ack 前收到的 cancel 一律视为幽灵消息（残留页面 / WebView 复用时序 / 误触），
-        -- 否则真机会出现"窗口一闪而过"。窗口被系统关闭走 __h5_onClose，不受此限制。
-        if c.acked and (tickCount() - (c.shownAt or 0) >= 1200) then
-            c.action = "cancel"
-        else
-            c.earlyCancels = (c.earlyCancels or 0) + 1
-            logger.warn(string.format("[H5] 忽略过早 cancel（页面未 ack），第 %d 次；sid=%s", c.earlyCancels, tostring(msg.sid)))
-        end
+        c.action = "cancel"
 
     elseif t == "ping" then
         send({ type = "pong", data = {
@@ -189,17 +157,16 @@ function _G.__h5_onMessage(raw)
             loopTime = tostring(c.values.loopTime or "-"),
         } })
 
-    elseif t == "diag" then
-        logger.info("[H5][diag] " .. tostring(msg.text))
-
     elseif t == "jserror" then
         logger.error("[H5] 页面 JS 报错: " .. tostring(msg.text))
     end
 end
 
 function _G.__h5_onClose()
-    logger.info("[H5] 窗口被外部关闭（ctx=" .. tostring(ctx ~= nil) .. "）")
-    if ctx then ctx.action = "cancel" end
+    if ctx then
+        logger.info("[H5] 窗口被外部关闭")
+        ctx.action = "cancel"
+    end
 end
 
 -- ============ 配置持久化 ============
@@ -237,8 +204,21 @@ function M.open(opts)
     end
     logger.info(string.format("[H5] 页面已写入 %s（%d 字节）", htmlPath, #page.html))
 
-    -- 每会话唯一标签：窗口/控件名唯一，避免上次运行的残留窗口与 WebView 消息串台
-    -- （⚠ 这段曾在"两套尺寸"补丁里被整段误删，导致 ctx=nil → 等待循环不跑 → 界面一闪而过）
+    -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
+    -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
+    -- 本游戏恒为横屏，故取 max 为宽、min 为高。
+    local sw, sh = getDisplaySize()
+    sw = tonumber(sw) or 1280
+    sh = tonumber(sh) or 720
+    local W = math.max(sw, sh)
+    local H = math.min(sw, sh)
+    local wvW = math.min(W - 60, 1100)
+    local wvH = math.min(H - 150, 620)
+    if wvW < 480 then wvW = 480 end
+    if wvH < 320 then wvH = 320 end
+
+    -- 每次运行使用唯一的窗口/控件名：避免上次运行残留的窗口/WebView 造成消息串台
+    -- （布局名同时是悬浮窗标题，因此用可读标题 + 唯一后缀）
     local tag = tostring(tickCount() % 1000000)
     WINDOW = "SAOIF 自动助手#" .. tag
     WEB = "web_" .. tag
@@ -263,38 +243,8 @@ function M.open(opts)
     }
     warned = {}
 
-    -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
-    -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
-    -- 本游戏恒为横屏，故取 max 为宽、min 为高。
-            -- ==================== 两套固定尺寸（UI 只按这两种尺寸维护样式） ====================
-    -- ⚠ 本环境（云机/模拟器）getDisplaySize() 与 getDisplayRotate() 都不随姿态变化：
-    --    实测横屏游戏下 getDisplaySize 仍返回 720x1280、getDisplayRotate 恒为竖屏值，
-    --    照它判断会把竖屏尺寸(640x980)套到 720 高的横屏上 → 窗口被系统直接关掉。
-    --    因此姿态改用常量指定：默认 landscape（游戏常态）；要在竖屏下调试就改成 "portrait"。
-    -- 尺寸策略 auto：本环境无法感知姿态（getDisplaySize/getDisplayRotate 恒返回竖屏值 720x1280），
-    -- 所以默认取"横竖屏都装得下"的尺寸：宽 ≤ min(屏幕宽高)-80，高 ≤ min(屏幕宽高)-120。
-    -- 血泪教训：窗口一旦超出屏幕（横屏套竖屏尺寸 / 竖屏套横屏尺寸），触摸会被吃掉 → 完全无法滚动。
-    -- 需要强制某一套时改 ORIENT："landscape"(1100x570) / "portrait"(640x980)，仍会做装得下的硬兜底。
-    local ORIENT = "auto"               -- "auto" | "landscape" | "portrait"
-    local sw, sh = getDisplaySize()
-    sw = tonumber(sw) or 720
-    sh = tonumber(sh) or 1280
-    local small = math.min(sw, sh)
-    local wvW, wvH
-    if ORIENT == "landscape" then
-        wvW, wvH = 1100, 570
-    elseif ORIENT == "portrait" then
-        wvW, wvH = 640, 980
-    else
-        wvW = math.min(1100, small - 80)   -- 720 -> 640
-        wvH = math.min(620, small - 120)   -- 720 -> 600
-    end
-    -- 硬兜底：任何模式下都不允许超出当次可用范围
-    if wvW > small - 40 then wvW = small - 40 end
-    if wvH > small - 120 then wvH = small - 120 end
-    logger.info(string.format("[H5] 窗口尺寸策略 %s -> %dx%d（屏幕 %dx%d）", ORIENT, wvW, wvH, sw, sh))
-
-local layW, layH = wvW + 40, wvH + 100
+    -- 窗口尺寸沿用验证过的组合：布局 = 内容 + 边距，show 居中并隐藏原生底栏
+    local layW, layH = wvW + 40, wvH + 100
     if not ui.newLayout(WINDOW, layW, layH) then
         logger.error("[H5] newLayout 失败")
         ctx = nil
@@ -313,7 +263,6 @@ local layW, layH = wvW + 40, wvH + 100
         return nil
     end
     logger.info(string.format("[H5] 界面已显示（WebView %dx%d）", wvW, wvH))
-    ctx.shownAt = tickCount()
 
     -- 等待用户操作；页面迟迟不就绪则超时退出，避免无人值守卡死
     local startT = tickCount()
