@@ -6,6 +6,8 @@ local exit = require("core.exit")
 
 local M = { name = "副本出口" }
 
+M.desc = "副本出口自动寻路：识别出口图标 → 靠近 → 攻击键变放大镜后点击 → 弹窗确认离开。"
+
 function M.readConfig(handle)
     -- 暂无专属设置页，使用默认参数
     return {

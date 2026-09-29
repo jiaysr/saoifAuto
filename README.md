@@ -38,6 +38,9 @@
 > 页面需由 Lua 写入 `sdcard/saoif_h5_page.html` 后再由 WebView 加载。
 > 若 `界面/` 下出现同名 HTML 副本，属于 IDE 自动生成，请忽略，以 `脚本/ui/h5_page.lua` 为准。
 
+> 功能列表自动来自 `dispatcher`：目前含「钓鱼」「小地图调试」「副本出口」，
+> 各任务模块的 `desc` / `defaults` 会自动呈现在功能卡片与参数初值中（无参数的任务用其内置默认值）。
+
 ### 变量通道
 
 - JS → Lua：`window.bridge.callLua("__h5_onMessage('<base64>')")`

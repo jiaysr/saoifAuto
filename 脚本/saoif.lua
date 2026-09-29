@@ -9,6 +9,8 @@ local bridge = require("ui.h5_bridge")
 
 -- 加载并注册所有功能模块（新增功能在此追加一行即可）
 require("tasks.fishing")
+require("tasks.minimap")
+require("tasks.dungeon_exit")
 
 -- 汇总各任务的默认参数，作为 H5 初值（页面不写死业务默认值）
 local function collectDefaults()

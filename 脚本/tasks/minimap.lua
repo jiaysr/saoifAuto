@@ -13,6 +13,8 @@ local fc = require("core.facing")
 
 local M = { name = "小地图调试" }
 
+M.desc = "小地图/大地图识别调试：视野朝向、角色朝向、图标标记，HUD 实时显示；可开启旋转自检。"
+
 local NL = string.char(10)   -- 换行符(避免源码里的转义写法)
 
 local HUD_SIZE = 15
