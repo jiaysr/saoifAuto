@@ -107,15 +107,39 @@ function _G.__h5_onMessage(raw)
     if not c then return end
 
     local t = tostring(msg.type)
+    -- 入站留痕（限量，防风暴刷屏）+ 限流：
+    -- 页面/残留 WebView 实例异常时会疯狂重发 ready，导致 ready→init→ack 风暴
+    -- （现象：日志里"初值已应用（第 1209 次下发）"，设备被拖死、窗口一闪而过）
+    c.recvN = (c.recvN or 0) + 1
+    if c.recvN <= 30 then logger.info("[H5] recv: " .. t .. " sid=" .. tostring(msg.sid)) end
+    local nowT = tickCount()
+    if not c.rateAt or nowT - c.rateAt >= 1000 then
+        c.rateAt, c.rateN = nowT, (c.rateN or 0) + 1
+    else
+        c.rateN = (c.rateN or 0) + 1
+        if c.rateN > 40 then
+            if not c.rateWarned then
+                c.rateWarned = true
+                logger.warn("[H5] 入站报文速率异常（>40/秒），进入限流：只放行 ack/submit/cancel")
+            end
+            if t ~= "ack" and t ~= "submit" and t ~= "cancel" then return end
+        end
+    end
 
     -- 会话校验：忽略上一次运行残留页面发来的消息（它们仍会触发定时器等）
     if t ~= "ready" and tostring(msg.sid or "") ~= c.sid then
-        logger.debug("[H5] 忽略非本会话消息: " .. t)
+        logger.info("[H5] 忽略非本会话消息: " .. t .. " sid=" .. tostring(msg.sid) .. " 当前=" .. tostring(c.sid))
         return
     end
 
     if t == "ready" then
-        if not c.ready then c.ready = true end
+        if c.ready then
+            -- 重复 ready（页面被重建/残留实例）只登记不处理，否则 init 无上限重发
+            c.dupReady = (c.dupReady or 0) + 1
+            if c.dupReady <= 5 then logger.warn("[H5] 重复 ready 已忽略（第 " .. c.dupReady .. " 次）") end
+            return
+        end
+        c.ready = true
         logger.info("[H5] 页面就绪，下发功能列表与初值")
         -- 短报文探针：确认 callJs 能到达当前活动的 WebView 实例
         local pok = ui.callJs(WEB, "javascript:APP.probe('ready" .. tostring(c.initTries or 0) .. "','" .. c.sid .. "')")
@@ -147,7 +171,15 @@ function _G.__h5_onMessage(raw)
         end
 
     elseif t == "cancel" then
-        c.action = "cancel"
+        -- 正常取消路径：用户点两次"退出"（页面必然已就绪并 ack）。
+        -- 页面未 ack 前收到的 cancel 一律视为幽灵消息（残留页面 / WebView 复用时序 / 误触），
+        -- 否则真机会出现"窗口一闪而过"。窗口被系统关闭走 __h5_onClose，不受此限制。
+        if c.acked and (tickCount() - (c.shownAt or 0) >= 1200) then
+            c.action = "cancel"
+        else
+            c.earlyCancels = (c.earlyCancels or 0) + 1
+            logger.warn(string.format("[H5] 忽略过早 cancel（页面未 ack），第 %d 次；sid=%s", c.earlyCancels, tostring(msg.sid)))
+        end
 
     elseif t == "ping" then
         send({ type = "pong", data = {
@@ -163,10 +195,8 @@ function _G.__h5_onMessage(raw)
 end
 
 function _G.__h5_onClose()
-    if ctx then
-        logger.info("[H5] 窗口被外部关闭")
-        ctx.action = "cancel"
-    end
+    logger.info("[H5] 窗口被外部关闭（ctx=" .. tostring(ctx ~= nil) .. "）")
+    if ctx then ctx.action = "cancel" end
 end
 
 -- ============ 配置持久化 ============
@@ -203,6 +233,32 @@ function M.open(opts)
         return nil
     end
     logger.info(string.format("[H5] 页面已写入 %s（%d 字节）", htmlPath, #page.html))
+
+    -- 每会话唯一标签：窗口/控件名唯一，避免上次运行的残留窗口与 WebView 消息串台
+    -- （⚠ 这段曾在"两套尺寸"补丁里被整段误删，导致 ctx=nil → 等待循环不跑 → 界面一闪而过）
+    local tag = tostring(tickCount() % 1000000)
+    WINDOW = "SAOIF 自动助手#" .. tag
+    WEB = "web_" .. tag
+    logger.info(string.format("[H5] 本次会话 窗口=%s 控件=%s", WINDOW, WEB))
+
+    ctx = {
+        ver = opts.ver or "1.0",
+        sid = "sid" .. tag,
+        tasks = opts.tasks or {},
+        configs = opts.configs or {},
+        values = opts.values or {},
+        validate = opts.validate,
+        autoTest = opts.autoTest and true or false,
+        autoFired = false,
+        acked = false,
+        ackedAt = 0,
+        initSentAt = 0,
+        initTries = 0,
+        action = nil,
+        result = nil,
+        ready = false,
+    }
+    warned = {}
 
     -- 屏幕尺寸：getDisplaySize() 的返回顺序不随横竖屏变化（实测横屏游戏下返回竖屏尺寸 720x1280），
     -- 直接用会算出"高过屏幕"的窗口 → 底部按钮被裁掉且无法滚动（横屏无法滚动问题的根因）。
@@ -247,6 +303,7 @@ local layW, layH = wvW + 40, wvH + 100
         return nil
     end
     logger.info(string.format("[H5] 界面已显示（WebView %dx%d）", wvW, wvH))
+    ctx.shownAt = tickCount()
 
     -- 等待用户操作；页面迟迟不就绪则超时退出，避免无人值守卡死
     local startT = tickCount()
