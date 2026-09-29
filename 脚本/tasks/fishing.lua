@@ -26,6 +26,23 @@ local popup = require("core.popup")
 
 local M = { name = "钓鱼" }
 
+-- 功能说明（H5 界面展示用）
+M.desc = "自动钓鱼：识别钓场状态栏（开始/提竿/命中），自动追踪完美区域并提竿，循环钓鱼并统计次数。"
+
+-- 默认参数（H5 界面初值来源；readConfig 缺省值也引用这里，避免两处维护）
+M.defaults = {
+    func        = "钓鱼",
+    loopTime    = 45,
+    maxCatch    = 0,
+    clickX      = 1173,
+    clickY      = 510,
+    scanX       = 1015,
+    zoneY1      = 123,
+    zoneY2      = 523,
+    showHud     = true,
+    debugColors = false,
+}
+
 -- ============ 特征比色串（"x|y|BBGGRR-偏色,..."，颜色为原 Python RRGGBB 转 BBGGRR） ============
 -- 坐标均为横屏 1280x720 空间（设备 720x1280 竖屏 + rotate=1 横屏显示）
 -- DO1：可点击"开始"状态
@@ -83,22 +100,30 @@ local HUD_SIZE = 16        -- 字体大小
 local HUD_X, HUD_Y = 20, 150
 local HUD_W, HUD_H = 560, 180
 
--- 从界面读取配置
-function M.readConfig(handle)
-    local function num(page, id, def)
-        local v = tonumber(getUIText(handle, page, id))
+-- 从 H5 界面下发的配置表读取参数（键名与 界面/saoif_h5.html 一致）
+-- 数值缺失/非法时退回 M.defaults
+function M.readConfig(cfg)
+    cfg = cfg or {}
+    local d = M.defaults
+    local function num(key, def)
+        local v = tonumber(cfg[key])
         return v or def
     end
+    local function bool(key, def)
+        local v = cfg[key]
+        if v == nil then return def end
+        return v and true or false
+    end
     return {
-        loopTime    = num(1, "edLoopTime", 45),
-        maxCatch    = num(1, "edMaxCatch", 0),
-        clickX      = num(1, "edClickX", 1173),
-        clickY      = num(1, "edClickY", 510),
-        scanX       = num(1, "edScanX", 1015),
-        zoneY1      = num(1, "edZoneY1", 123),
-        zoneY2      = num(1, "edZoneY2", 523),
-        showHud     = getUIChecked(handle, 1, "chkShowHud"),
-        debugColors = getUIChecked(handle, 1, "chkDebugColors"),
+        loopTime    = num("loopTime", d.loopTime),
+        maxCatch    = num("maxCatch", d.maxCatch),
+        clickX      = num("clickX", d.clickX),
+        clickY      = num("clickY", d.clickY),
+        scanX       = num("scanX", d.scanX),
+        zoneY1      = num("zoneY1", d.zoneY1),
+        zoneY2      = num("zoneY2", d.zoneY2),
+        showHud     = bool("showHud", d.showHud),
+        debugColors = bool("debugColors", d.debugColors),
     }
 end
 
