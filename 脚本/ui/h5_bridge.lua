@@ -189,6 +189,9 @@ function _G.__h5_onMessage(raw)
             loopTime = tostring(c.values.loopTime or "-"),
         } })
 
+    elseif t == "diag" then
+        logger.info("[H5][diag] " .. tostring(msg.text))
+
     elseif t == "jserror" then
         logger.error("[H5] 页面 JS 报错: " .. tostring(msg.text))
     end
