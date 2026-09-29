@@ -127,7 +127,7 @@ function _G.__h5_onMessage(raw)
     end
 
     -- 会话校验：忽略上一次运行残留页面发来的消息（它们仍会触发定时器等）
-    if t ~= "ready" and tostring(msg.sid or "") ~= c.sid then
+    if t ~= "ready" and t ~= "diag" and tostring(msg.sid or "") ~= c.sid then
         logger.info("[H5] 忽略非本会话消息: " .. t .. " sid=" .. tostring(msg.sid) .. " 当前=" .. tostring(c.sid))
         return
     end
