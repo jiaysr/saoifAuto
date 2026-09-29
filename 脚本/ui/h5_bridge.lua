@@ -268,21 +268,28 @@ function M.open(opts)
     --    实测横屏游戏下 getDisplaySize 仍返回 720x1280、getDisplayRotate 恒为竖屏值，
     --    照它判断会把竖屏尺寸(640x980)套到 720 高的横屏上 → 窗口被系统直接关掉。
     --    因此姿态改用常量指定：默认 landscape（游戏常态）；要在竖屏下调试就改成 "portrait"。
-    local ORIENT = "landscape"          -- "landscape" | "portrait"
-    local wvW, wvH
-    if ORIENT == "portrait" then
-        wvW, wvH = 640, 980             -- 竖屏（屏幕 720x1280）
-    else
-        wvW, wvH = 1100, 570            -- 横屏（屏幕 1280x720，游戏常态）
-    end
-    -- 兜底：不允许超过当次屏幕（按 max/min 取可用宽高，与姿态无关）
+    -- 尺寸策略 auto：本环境无法感知姿态（getDisplaySize/getDisplayRotate 恒返回竖屏值 720x1280），
+    -- 所以默认取"横竖屏都装得下"的尺寸：宽 ≤ min(屏幕宽高)-80，高 ≤ min(屏幕宽高)-120。
+    -- 血泪教训：窗口一旦超出屏幕（横屏套竖屏尺寸 / 竖屏套横屏尺寸），触摸会被吃掉 → 完全无法滚动。
+    -- 需要强制某一套时改 ORIENT："landscape"(1100x570) / "portrait"(640x980)，仍会做装得下的硬兜底。
+    local ORIENT = "auto"               -- "auto" | "landscape" | "portrait"
     local sw, sh = getDisplaySize()
     sw = tonumber(sw) or 720
     sh = tonumber(sh) or 1280
-    local availW, availH = math.max(sw, sh), math.min(sw, sh)
-    if ORIENT == "portrait" then availW, availH = math.min(sw, sh), math.max(sw, sh) end
-    if wvW > availW - 40 then wvW = availW - 40 end
-    if wvH > availH - 120 then wvH = availH - 120 end
+    local small = math.min(sw, sh)
+    local wvW, wvH
+    if ORIENT == "landscape" then
+        wvW, wvH = 1100, 570
+    elseif ORIENT == "portrait" then
+        wvW, wvH = 640, 980
+    else
+        wvW = math.min(1100, small - 80)   -- 720 -> 640
+        wvH = math.min(620, small - 120)   -- 720 -> 600
+    end
+    -- 硬兜底：任何模式下都不允许超出当次可用范围
+    if wvW > small - 40 then wvW = small - 40 end
+    if wvH > small - 120 then wvH = small - 120 end
+    logger.info(string.format("[H5] 窗口尺寸策略 %s -> %dx%d（屏幕 %dx%d）", ORIENT, wvW, wvH, sw, sh))
 
 local layW, layH = wvW + 40, wvH + 100
     if not ui.newLayout(WINDOW, layW, layH) then
