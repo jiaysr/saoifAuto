@@ -163,7 +163,8 @@ function _G.__h5_onMessage(raw)
 end
 
 function _G.__h5_onClose()
-    if ctx then
+    -- 旋转适配会主动 dismiss 再重建，此时不算"被外部关闭"
+    if ctx and not ctx.rebuilding then
         logger.info("[H5] 窗口被外部关闭")
         ctx.action = "cancel"
     end
@@ -204,11 +205,21 @@ function M.open(opts)
     end
     logger.info(string.format("[H5] 页面已写入 %s（%d 字节）", htmlPath, #page.html))
 
-    local dw, dh = getDisplaySize()
-    local wvW = math.min((tonumber(dw) or 1280) - 80, 1100)
-    local wvH = math.min((tonumber(dh) or 720) - 170, 620)
-    if wvW < 640 then wvW = 640 end
-    if wvH < 400 then wvH = 400 end
+    -- 按当前屏幕方向计算 WebView 尺寸
+    local function calcSize()
+        local dw, dh = getDisplaySize()
+        -- getDisplaySize 返回未旋转的原始分辨率：横屏（旋转 90/270 度）时当前屏幕高是短边，需交换
+        local rot = tonumber(getDisplayRotate()) or 0
+        if rot % 2 ~= 0 then dw, dh = dh, dw end
+        local w = math.min((tonumber(dw) or 1280) - 80, 1100)
+        -- 高度必须给显式像素值：引擎把布局包在 ScrollView 里，高度传 -1（填满）会塌缩成自适应内容
+        local h = (tonumber(dh) or 720) - 130
+        if w < 640 then w = 640 end
+        if h < 400 then h = 400 end
+        return w, h
+    end
+
+    local wvW, wvH = calcSize()
 
     -- 每次运行使用唯一的窗口/控件名：避免上次运行残留的窗口/WebView 造成消息串台
     -- （布局名同时是悬浮窗标题，因此用可读标题 + 唯一后缀）
@@ -233,33 +244,40 @@ function M.open(opts)
         action = nil,
         result = nil,
         ready = false,
+        rebuilding = false,
     }
     warned = {}
 
-    -- 窗口尺寸沿用验证过的组合：布局 = 内容 + 边距，show 居中并隐藏原生底栏
-    local layW, layH = wvW + 40, wvH + 100
-    if not ui.newLayout(WINDOW, layW, layH) then
-        logger.error("[H5] newLayout 失败")
+    -- 创建（或旋转后重建）悬浮窗：布局填满屏幕，WebView 宽度填满、高度用显式像素值
+    local function buildWindow()
+        if not ui.newLayout(WINDOW, -1, -1) then
+            logger.error("[H5] newLayout 失败")
+            return false
+        end
+        if not ui.addWebView(WINDOW, WEB, "file://" .. htmlPath, -1, wvH) then
+            logger.error("[H5] addWebView 失败")
+            ui.dismiss(WINDOW)
+            return false
+        end
+        ui.setOnClose(WINDOW, "__h5_onClose()")
+        if not ui.show(WINDOW, false) then
+            logger.error("[H5] 界面显示失败")
+            return false
+        end
+        logger.info(string.format("[H5] 界面已显示（WebView %dx%d）", wvW, wvH))
+        return true
+    end
+
+    if not buildWindow() then
         ctx = nil
         return nil
     end
-    if not ui.addWebView(WINDOW, WEB, "file://" .. htmlPath, wvW, wvH) then
-        logger.error("[H5] addWebView 失败")
-        ui.dismiss(WINDOW)
-        ctx = nil
-        return nil
-    end
-    ui.setOnClose(WINDOW, "__h5_onClose()")
-    if not ui.show(WINDOW, false) then
-        logger.error("[H5] 界面显示失败")
-        ctx = nil
-        return nil
-    end
-    logger.info(string.format("[H5] 界面已显示（WebView %dx%d）", wvW, wvH))
 
     -- 等待用户操作；页面迟迟不就绪则超时退出，避免无人值守卡死
     local startT = tickCount()
     local warnedLate = false
+    local lastRot = tonumber(getDisplayRotate()) or 0
+
     while ctx and not ctx.action do
         local elapsed = tickCount() - startT
         -- init 未确认前重发（页面可能被 WebView 重建，导致首次初值丢失）
@@ -291,6 +309,30 @@ function M.open(opts)
             logger.warn("[H5] 页面 20 秒仍未就绪，继续等待…")
         end
         sleep(200)
+
+        -- 屏幕方向变化检测：重建窗口以适配新的可视区高度。
+        -- 已填写的参数都在 ctx.values 里，新页面 ready 后会原样重发，用户无感知。
+        local okR, curRot = pcall(getDisplayRotate)
+        curRot = (okR and tonumber(curRot)) or lastRot
+        if curRot % 2 ~= lastRot % 2 then
+            logger.info(string.format("[H5] 屏幕方向变化（rot %d -> %d），重建界面适配", lastRot, curRot))
+            lastRot = curRot
+            ctx.rebuilding = true
+            ui.dismiss(WINDOW)
+            ctx.rebuilding = false
+            ctx.ready = false
+            ctx.acked = false
+            ctx.ackGaveUp = nil
+            ctx.initTries = 0
+            wvW, wvH = calcSize()
+            if not buildWindow() then
+                ctx.action = "cancel"
+                break
+            end
+            -- 就绪超时从重建时刻重新计时
+            startT = tickCount()
+            warnedLate = false
+        end
     end
 
     local action, result = "cancel", nil
