@@ -22,6 +22,6 @@ return {
     { key = "facingVotes", label = "角色投票帧数",  type = "int",    min = 1, max = 5 },
     { key = "selfTest",    label = "转向自检",      type = "bool" },
     { key = "debugScan",   label = "打印扫描图",    type = "bool" },
-    { key = "showHud",     label = "显示 HUD",      type = "bool" },
+    { key = "mmShowHud",   label = "显示 HUD",      type = "bool" },
 },
 }
