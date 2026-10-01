@@ -1,0 +1,21 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "LrCoder 运行",
+			"type": "lrcoder-lua",
+			"request": "launch",
+			"program": "${workspaceFolder}",
+			"debug": false,
+			"addr": "${command:lrcoder.project-bridge.pickDevice}"
+		},
+		{
+			"name": "LrCoder 调试",
+			"type": "lrcoder-lua",
+			"request": "launch",
+			"program": "${workspaceFolder}",
+			"debug": true,
+			"addr": "${command:lrcoder.project-bridge.pickDevice}"
+		}
+	]
+}

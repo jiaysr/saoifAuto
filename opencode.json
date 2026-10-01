@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "lrjl": {
+      "type": "local",
+      "command": ["D:/develop/懒人精灵/mcp-proxy.exe"],
+      "enabled": true
+    }
+  }
+}

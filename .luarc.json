@@ -10,5 +10,27 @@
     "callSnippet": "Replace",
     "workspaceWord": true,
     "showWord": "Fallback"
-  }
+  },
+  "runtime.version": "Lua 5.3",
+  "runtime.unicodeName": true,
+  "runtime.path": [
+    "脚本/?.lua",
+    "脚本/?/init.lua",
+    "?.lua",
+    "?/init.lua"
+  ],
+  "completion.callSnippet": "Replace",
+  "workspace.library": [
+    "c:/Users/吴念飞/Desktop/VSCode-win32-x64/resources/app/extensions/lrcoder-lua-api-docs/api/android/meta.lua"
+  ],
+  "diagnostics.disable": [
+    "undefined-global",
+    "name-style-check",
+    "spell-check",
+    "codestyle-check",
+    "no-unknown",
+    "lowercase-global",
+    "global-in-nil-env",
+    "trailing-space"
+  ]
 }
